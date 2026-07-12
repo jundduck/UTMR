@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -e
+
+export FASTDDS_BUILTIN_TRANSPORTS="${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+UTMR_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+HELPER_DIR="$SCRIPT_DIR/helpers"
+AUTOWARE_DIR="${AUTOWARE_DIR:-$UTMR_ROOT/autoware}"
+UTMR_STEP_LOG="${UTMR_STEP_LOG:-$UTMR_ROOT/experiments/utmr/results/awsim_live/raw/utmr_steps.jsonl}"
+UTMR_MODE="${UTMR_MODE:-utmr}"
+UTMR_INIT_X="${UTMR_INIT_X:-81377.0}"
+UTMR_INIT_Y="${UTMR_INIT_Y:-49917.0}"
+UTMR_INIT_Z="${UTMR_INIT_Z:-41.3}"
+UTMR_INIT_QX="${UTMR_INIT_QX:-0.00047656021952033887}"
+UTMR_INIT_QY="${UTMR_INIT_QY:--0.005042256930040435}"
+UTMR_INIT_QZ="${UTMR_INIT_QZ:-0.29035442036333825}"
+UTMR_INIT_QW="${UTMR_INIT_QW:-0.9569057733710663}"
+UTMR_INIT_COVARIANCE="${UTMR_INIT_COVARIANCE:-[0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0685, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0685, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0685]}"
+UTMR_GOAL_X="${UTMR_GOAL_X:-81393.98}"
+UTMR_GOAL_Y="${UTMR_GOAL_Y:-49928.02}"
+UTMR_GOAL_Z="${UTMR_GOAL_Z:-41.27}"
+UTMR_GOAL_QX="${UTMR_GOAL_QX:-0.00047656021952033887}"
+UTMR_GOAL_QY="${UTMR_GOAL_QY:--0.005042256930040435}"
+UTMR_GOAL_QZ="${UTMR_GOAL_QZ:-0.29035442036333825}"
+UTMR_GOAL_QW="${UTMR_GOAL_QW:-0.9569057733710663}"
+UTMR_ROUTE_LENGTH_M="${UTMR_ROUTE_LENGTH_M:-20.25}"
+UTMR_FALLBACK_X="${UTMR_FALLBACK_X:-$UTMR_INIT_X}"
+UTMR_FALLBACK_Y="${UTMR_FALLBACK_Y:-$UTMR_INIT_Y}"
+UTMR_FALLBACK_Z="${UTMR_FALLBACK_Z:-$UTMR_INIT_Z}"
+UTMR_FALLBACK_YAW="${UTMR_FALLBACK_YAW:-0.5895}"
+UTMR_COLLISION_TOPIC="${UTMR_COLLISION_TOPIC:-/utmr/collision}"
+UTMR_COLLISION_OUTPUT_TOPIC="${UTMR_COLLISION_OUTPUT_TOPIC:-/utmr/collision}"
+UTMR_SERVICE_LIST_TIMEOUT_S="${UTMR_SERVICE_LIST_TIMEOUT_S:-8}"
+UTMR_SERVICE_CALL_TIMEOUT_S="${UTMR_SERVICE_CALL_TIMEOUT_S:-15}"
+export UTMR_MODE
+export UTMR_STEP_LOG
+export UTMR_GOAL_X
+export UTMR_GOAL_Y
+export UTMR_ROUTE_LENGTH_M
+export UTMR_FALLBACK_X
+export UTMR_FALLBACK_Y
+export UTMR_FALLBACK_Z
+export UTMR_FALLBACK_YAW
+export UTMR_COLLISION_TOPIC
+export UTMR_COLLISION_OUTPUT_TOPIC
+
+source /opt/ros/humble/setup.bash
+source "$SCRIPT_DIR/setup_runtime_overlay.sh"
+cd "$AUTOWARE_DIR"
+source install/setup.bash
+
+start_helper() {
+  local name="$1"
+  local script="$2"
+  local log="$3"
+
+  if pgrep -f "$script" >/dev/null; then
+    echo "$name already running"
+  else
+    nohup python3 "$script" >"$log" 2>&1 &
+    echo "$name started pid=$!"
+  fi
+}
+
+start_helper pointcloud_relay "$HELPER_DIR/pointcloud_relay.py" /tmp/utmr-pointcloud-relay.log
+start_helper mrm_normalizer "$HELPER_DIR/mrm_normalizer.py" /tmp/utmr-mrm-normalizer.log
+start_helper engage_injector "$HELPER_DIR/engage_injector.py" /tmp/utmr-engage-injector.log
+start_helper drive_gear_injector "$HELPER_DIR/drive_gear_injector.py" /tmp/utmr-drive-gear-injector.log
+
+if [[ "${UTMR_START_COLLISION_MONITOR:-1}" != "0" ]]; then
+  start_helper collision_monitor "$HELPER_DIR/collision_monitor.py" /tmp/utmr-collision-monitor.log
+fi
+
+if [[ "${UTMR_START_METRIC_MONITOR:-1}" != "0" && -n "${UTMR_EPISODE_CSV:-}" ]]; then
+  start_helper episode_metric_monitor "$HELPER_DIR/episode_metric_monitor.py" /tmp/utmr-episode-metric-monitor.log
+fi
+
+echo "waiting for Autoware services..."
+sleep 3
+
+service_exists() {
+  timeout "$UTMR_SERVICE_LIST_TIMEOUT_S" ros2 service list 2>/tmp/utmr-ros2-service-list.err | grep -qx "$1"
+}
+
+if service_exists /localization/initialize; then
+  INIT_REQUEST="{method: 1, pose_with_covariance: [{header: {frame_id: map}, pose: {pose: {position: {x: $UTMR_INIT_X, y: $UTMR_INIT_Y, z: $UTMR_INIT_Z}, orientation: {x: $UTMR_INIT_QX, y: $UTMR_INIT_QY, z: $UTMR_INIT_QZ, w: $UTMR_INIT_QW}}, covariance: $UTMR_INIT_COVARIANCE}}]}"
+  timeout "$UTMR_SERVICE_CALL_TIMEOUT_S" ros2 service call /localization/initialize autoware_localization_msgs/srv/InitializeLocalization "$INIT_REQUEST" || true
+else
+  echo "skip localization initialize: service is not available yet"
+fi
+
+if service_exists /api/routing/set_route_points; then
+  ROUTE_REQUEST="{header: {frame_id: map}, option: {allow_goal_modification: true}, goal: {position: {x: $UTMR_GOAL_X, y: $UTMR_GOAL_Y, z: $UTMR_GOAL_Z}, orientation: {x: $UTMR_GOAL_QX, y: $UTMR_GOAL_QY, z: $UTMR_GOAL_QZ, w: $UTMR_GOAL_QW}}, waypoints: []}"
+  timeout "$UTMR_SERVICE_CALL_TIMEOUT_S" ros2 service call /api/routing/set_route_points autoware_adapi_v1_msgs/srv/SetRoutePoints "$ROUTE_REQUEST" || true
+fi
+
+if service_exists /system/operation_mode/change_operation_mode; then
+  timeout "$UTMR_SERVICE_CALL_TIMEOUT_S" ros2 service call /system/operation_mode/change_operation_mode autoware_system_msgs/srv/ChangeOperationMode "{mode: 2}" || true
+fi
+
+if service_exists /control/vehicle_cmd_gate/set_stop; then
+  timeout "$UTMR_SERVICE_CALL_TIMEOUT_S" ros2 service call /control/vehicle_cmd_gate/set_stop tier4_control_msgs/srv/SetStop "{stop: false, request_source: utmr}" || true
+fi
+
+mkdir -p "$(dirname "$UTMR_STEP_LOG")"
+start_helper utmr_planner "$HELPER_DIR/utmr_planner_node.py" /tmp/utmr-planner-node.log
+
+echo "done. UTMR planner mode=$UTMR_MODE, step log=$UTMR_STEP_LOG"

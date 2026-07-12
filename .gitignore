@@ -1,0 +1,43 @@
+# Python/cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local publish/work directories
+.publish_repo/
+.codegraph
+
+# Large external workspaces and generated assets
+AWSIM-Demo/
+runtime/
+autoware/build/
+autoware/install/
+autoware/log/
+autoware/src/
+third_party/WoTE/ckpts/
+third_party/WoTE/dataset/
+third_party/WoTE/exp/
+third_party/WoTE/outputs/
+third_party/WoTE/multirun/
+
+# Experiment outputs and downloaded logs
+experiments/utmr/results/
+
+# Large binaries / local papers
+*.bag
+*.db3
+*.mcap
+*.pth
+*.ckpt
+*.npy
+*.npz
+*.xz
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.pdf
+
+# Editor/system
+.DS_Store
+.vscode/

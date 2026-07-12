@@ -1,0 +1,30 @@
+{
+  "description": "AWSIM Shinjuku smoke scenarios for the UTMR paper pipeline. Values are editable; the implementation only requires the schema.",
+  "scenarios": [
+    {
+      "scenario_id": "shinjuku_route_001",
+      "timeout_s": 120.0,
+      "route_length_m": 20.25,
+      "initial_pose": {
+        "x": 81377.0,
+        "y": 49917.0,
+        "z": 41.3,
+        "qx": 0.00047656021952033887,
+        "qy": -0.005042256930040435,
+        "qz": 0.29035442036333825,
+        "qw": 0.9569057733710663
+      },
+      "goal_pose": {
+        "x": 81393.98,
+        "y": 49928.02,
+        "z": 41.27,
+        "qx": 0.00047656021952033887,
+        "qy": -0.005042256930040435,
+        "qz": 0.29035442036333825,
+        "qw": 0.9569057733710663
+      },
+      "obstacle_frame": "ego",
+      "obstacles": []
+    }
+  ]
+}

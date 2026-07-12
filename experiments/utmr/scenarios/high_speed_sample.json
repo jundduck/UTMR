@@ -1,0 +1,26 @@
+{
+  "scenarios": [
+    {
+      "scenario_id": "straight_fast_cones_001",
+      "route_length_m": 1200.0,
+      "initial_speed_mps": 27.0,
+      "target_speed_mps": 36.0,
+      "obstacles": [
+        {"x_m": 260.0, "y_m": 1.8, "radius_m": 1.0, "label": "cone"},
+        {"x_m": 520.0, "y_m": -1.8, "radius_m": 1.0, "label": "cone"},
+        {"x_m": 860.0, "y_m": 0.0, "radius_m": 1.2, "label": "barrier"}
+      ]
+    },
+    {
+      "scenario_id": "straight_fast_cones_002",
+      "route_length_m": 1500.0,
+      "initial_speed_mps": 30.0,
+      "target_speed_mps": 39.0,
+      "obstacles": [
+        {"x_m": 340.0, "y_m": 0.0, "radius_m": 1.2, "label": "cone"},
+        {"x_m": 710.0, "y_m": 2.0, "radius_m": 1.1, "label": "cone"},
+        {"x_m": 1050.0, "y_m": -2.0, "radius_m": 1.1, "label": "cone"}
+      ]
+    }
+  ]
+}
