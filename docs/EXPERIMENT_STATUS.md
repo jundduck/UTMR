@@ -131,7 +131,7 @@ Status at documentation time: running.
 Observed state:
 
 ```text
-baseline guarded-safety full: 3991 / 12146 step rows
+baseline guarded-safety full: 4764 / 12146 step rows
 active process: run_pdm_score.py
 ```
 
