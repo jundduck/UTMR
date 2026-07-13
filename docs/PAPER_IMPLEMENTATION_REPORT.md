@@ -338,6 +338,56 @@ latency_p99_ms          338.6317099993903
   무조건 적용하면 위험하지만, coarse confidence 손실을 제한하면 full set에서도
   개선 가능하다”입니다.
 
+### 4.9 K256 원본 WoTE anchor full 검증
+
+논문 본문 설정은 `K=64`이지만, WoTE 공개 자산에는 `K=256` anchor/cache가
+포함되어 있습니다. 그래서 같은 guarded safety 설정이 더 강한 원본 후보군에서도
+유지되는지 추가 확인했습니다.
+
+| Method | Scene | Success | Failed | Score | Rerank accepted |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| K256 baseline | 12146 | 12146 | 0 | 0.8833150351 | 0.0% |
+| K256 guarded safety UTMR | 12146 | 12146 | 0 | 0.8827077445 | 8.1014% |
+
+추가 진단:
+
+```text
+baseline latency_mean_ms      616.9268
+baseline latency_p99_ms       667.6763
+utmr latency_mean_ms          627.1611
+utmr latency_p99_ms           680.0303
+utmr fine_score_coverage_pct  100.0
+```
+
+의미:
+
+- K256 baseline은 K64 baseline보다 훨씬 높습니다.
+- K64에서 선택한 guard를 그대로 쓰면 K256에서는 baseline보다
+  `-0.0006072906` 낮습니다.
+- 따라서 K64 논문 설정에서는 UTMR 효과가 확인됐지만, K256 원본 anchor로
+  확장하려면 별도 guard/weight retuning이 필요합니다.
+
+### 4.10 K64 guarded sensitivity 1000
+
+`UTMR_FINE_MARGIN_MIN`, `UTMR_MAX_COARSE_DROP`, `UTMR_TOP_N` 조합을 바꿔
+1000-scene sensitivity를 돌렸습니다.
+
+| Rank | Margin | Max coarse drop | Top-N | Score | Delta vs baseline | Rerank accepted |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | - | - | - | 0.8638675087 | +0.0000000000 | 0.0% |
+| 1 | 0.15 | 0.5 | 8 | 0.8720460220 | +0.0081785132 | 9.5% |
+| 2 | 0.10 | 0.5 | 8 | 0.8709648289 | +0.0070973202 | 17.4% |
+| 3 | 0.20 | 0.5 | 8 | 0.8695653544 | +0.0056978457 | 7.3% |
+| 4 | 0.10 | 0.5 | 16 | 0.8681040503 | +0.0042365416 | 14.0% |
+| 5 | 0.15 | 0.5 | 16 | 0.8680213566 | +0.0041538479 | 7.9% |
+
+의미:
+
+- 기존 best인 `margin=0.15`, `drop=0.5`, `topN=8`이 그대로 1등입니다.
+- `drop=0.2`는 너무 보수적이라 대부분 개선폭이 작습니다.
+- `topN=16`은 후보를 더 많이 보지만, 이번 grid에서는 `topN=8`보다 낮았습니다.
+- 이 sensitivity는 K64 full run에 쓴 설정 선택을 뒷받침합니다.
+
 ## 5. 현재 best 설정
 
 ```bash
@@ -531,4 +581,6 @@ experiments/utmr/check_assets.sh
 4. unguarded reranking은 너무 공격적이라 score를 낮췄습니다.
 5. guarded reranking은 1000-scene subset에서 baseline보다 높았습니다.
 6. guarded reranking은 full `12146`-scenario 평가에서도 baseline보다 높았습니다.
-7. 다음 핵심 검증은 K=256 원본 WoTE anchor/cache 반복과 AWSIM/Autoware live batch입니다.
+7. K64 sensitivity에서도 `margin=0.15`, `drop=0.5`, `topN=8`이 가장 좋았습니다.
+8. K256 원본 anchor에서는 같은 guard가 baseline보다 약간 낮아 별도 retuning이 필요합니다.
+9. 다음 핵심 검증은 AWSIM/Autoware live batch입니다.

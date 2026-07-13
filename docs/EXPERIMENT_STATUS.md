@@ -159,6 +159,65 @@ CSV results:
 /home/yax/UTMR/third_party/WoTE/exp/eval/WoTE/default_utmr_guarded_safety_full/2026.07.13.01.45.04.csv
 ```
 
+### 7. K256 Original WoTE Anchor Check
+
+Status: complete.
+
+This is not the paper's main setting. The paper uses `K=64`, while this run
+uses the released WoTE `K=256` anchors/cache to check whether the same guarded
+reranking transfers to the stronger original candidate set.
+
+| Method | Success | Failed | PDM score | Selected changed / accepted |
+| --- | ---: | ---: | ---: | ---: |
+| K256 baseline | 12146 | 0 | 0.8833150351 | 0.0% |
+| K256 guarded safety UTMR | 12146 | 0 | 0.8827077445 | 8.1014% |
+
+Finding:
+
+- K256 baseline is much stronger than the K64 baseline.
+- Reusing the K64 guarded-safety setting on K256 is slightly worse than
+  baseline: `-0.0006072906`.
+- This suggests K256 needs separate UTMR retuning instead of directly reusing
+  the K64 guard.
+
+Runtime/diagnostics:
+
+```text
+K256 baseline latency_mean_ms          616.9268
+K256 baseline latency_p99_ms           667.6763
+K256 guarded latency_mean_ms           627.1611
+K256 guarded latency_p99_ms            680.0303
+K256 guarded rerank_accepted_pct       8.1014
+```
+
+### 8. K64 Guard Sensitivity 1000-Scene Run
+
+Status: complete.
+
+Baseline:
+
+| Method | Success | Failed | PDM score |
+| --- | ---: | ---: | ---: |
+| K64 baseline | 1000 | 0 | 0.8638675087 |
+
+Top sensitivity results:
+
+| Rank | `UTMR_FINE_MARGIN_MIN` | `UTMR_MAX_COARSE_DROP` | `UTMR_TOP_N` | PDM score | Delta vs baseline | Accepted |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.15 | 0.5 | 8 | 0.8720460220 | +0.0081785132 | 9.5% |
+| 2 | 0.10 | 0.5 | 8 | 0.8709648289 | +0.0070973202 | 17.4% |
+| 3 | 0.20 | 0.5 | 8 | 0.8695653544 | +0.0056978457 | 7.3% |
+| 4 | 0.10 | 0.5 | 16 | 0.8681040503 | +0.0042365416 | 14.0% |
+| 5 | 0.15 | 0.5 | 16 | 0.8680213566 | +0.0041538479 | 7.9% |
+
+Finding:
+
+- The previously selected setting, `margin=0.15`, `drop=0.5`, `topN=8`,
+  remains the best 1000-scene setting.
+- `drop=0.5` consistently works better than the stricter `drop=0.2`.
+- `topN=8` is more stable than `topN=16` in the tested grid.
+- The sensitivity result supports the chosen K64 full-run setting.
+
 ## AWSIM/Autoware Status
 
 Status: implemented scaffolding, live batch pending.
@@ -325,12 +384,7 @@ experiments/utmr/check_assets.sh
 
 ## Next Experiments
 
-1. Repeat guarded-safety evaluation with K=256 original WoTE anchors/cache to
-   separate the K=64 subset effect from the UTMR reranking effect.
-2. Run UTMR sensitivity around:
-   - `UTMR_FINE_MARGIN_MIN = 0.10, 0.15, 0.20`
-   - `UTMR_MAX_COARSE_DROP = 0.2, 0.5`
-   - `UTMR_TOP_N = 8, 16`
-3. Run AWSIM/Autoware live batch after topic probing.
-4. Convert the final full/subset/sensitivity results into paper-ready tables
+1. Decide whether to retune a separate K256 guard/weight setting.
+2. Run AWSIM/Autoware live batch after topic probing.
+3. Convert the final full/subset/sensitivity results into paper-ready tables
    and figures.
