@@ -311,15 +311,32 @@ UTMR_MAX_COARSE_DROP=0.5
 
 ### 4.8 guarded safety full
 
-문서 갱신 시점 상태:
+full `12146`-scenario 평가도 완료됐습니다.
+
+| Method | Scene | Success | Failed | Score | Rerank accepted |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| baseline | 12146 | 12146 | 0 | 0.8471632864 | 0.0% |
+| guarded safety UTMR | 12146 | 12146 | 0 | 0.8542971577 | 9.8139% |
+
+추가 진단:
 
 ```text
-baseline guarded-safety full: 4764 / 12146 step rows
-active process: run_pdm_score.py
+trigger_rate_pct        100.0
+selected_changed_pct    9.81393051210275
+rerank_accepted_pct     9.81393051210275
+fine_score_coverage_pct 100.0
+latency_mean_ms         308.85380620006794
+latency_p99_ms          338.6317099993903
 ```
 
-아직 최종 결과는 나오지 않았습니다. 완료 후 full baseline과 full guarded safety
-UTMR score를 비교해야 합니다.
+의미:
+
+- full test set에서도 guarded safety UTMR가 baseline보다 높았습니다.
+- score 개선폭은 `+0.0071338713`입니다.
+- 선택을 전부 바꾼 것이 아니라, 약 9.8%의 step만 rerank했습니다.
+- 따라서 현재 구현의 핵심 주장은 “fine metric 기반 재선택을 guard 없이
+  무조건 적용하면 위험하지만, coarse confidence 손실을 제한하면 full set에서도
+  개선 가능하다”입니다.
 
 ## 5. 현재 best 설정
 
@@ -513,4 +530,5 @@ experiments/utmr/check_assets.sh
 3. `fine_scores=None` 문제를 고친 뒤 실제 reranking이 동작했습니다.
 4. unguarded reranking은 너무 공격적이라 score를 낮췄습니다.
 5. guarded reranking은 1000-scene subset에서 baseline보다 높았습니다.
-6. full guarded-safety 결과가 나오면 NAVSIM 쪽 논문 구현의 핵심 결과로 쓸 수 있습니다.
+6. guarded reranking은 full `12146`-scenario 평가에서도 baseline보다 높았습니다.
+7. 다음 핵심 검증은 K=256 원본 WoTE anchor/cache 반복과 AWSIM/Autoware live batch입니다.

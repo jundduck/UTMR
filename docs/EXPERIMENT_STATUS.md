@@ -1,6 +1,6 @@
 # UTMR Experiment Status
 
-Last updated: 2026-07-12 KST.
+Last updated: 2026-07-13 KST.
 
 ## Scope
 
@@ -121,28 +121,43 @@ Status: complete and positive.
 | baseline | 1000 | 0 | 0.8638675087 | 0.0% |
 | guarded safety UTMR | 1000 | 0 | 0.8720460220 | 9.5% |
 
-This is the best current NAVSIM result and the reason the full guarded-safety
-run was started.
+This subset run was used to choose the guarded-safety setting for the full
+`12146`-scenario run.
 
 ### 6. Guarded Safety Full Run
 
-Status at documentation time: running.
+Status: complete and positive.
 
-Observed state:
+Final result:
+
+| Method | Success | Failed | PDM score | Selected changed / accepted |
+| --- | ---: | ---: | ---: | ---: |
+| baseline | 12146 | 0 | 0.8471632864 | 0.0% |
+| guarded safety UTMR | 12146 | 0 | 0.8542971577 | 9.8139% |
+
+Runtime/diagnostics from the step log:
 
 ```text
-baseline guarded-safety full: 4764 / 12146 step rows
-active process: run_pdm_score.py
+trigger_rate_pct        100.0
+selected_changed_pct    9.81393051210275
+rerank_accepted_pct     9.81393051210275
+fine_score_coverage_pct 100.0
+latency_mean_ms         308.85380620006794
+latency_p99_ms          338.6317099993903
 ```
 
-Expected output folder:
+Output folder:
 
 ```text
 experiments/utmr/results/navsim_guarded_safety_full
 ```
 
-After completion, compare full baseline and guarded-safety UTMR scores using the
-post-run commands below.
+CSV results:
+
+```text
+/home/yax/UTMR/third_party/WoTE/exp/eval/WoTE/default_baseline_guarded_safety_full/2026.07.13.00.16.03.csv
+/home/yax/UTMR/third_party/WoTE/exp/eval/WoTE/default_utmr_guarded_safety_full/2026.07.13.01.45.04.csv
+```
 
 ## AWSIM/Autoware Status
 
@@ -310,11 +325,12 @@ experiments/utmr/check_assets.sh
 
 ## Next Experiments
 
-1. Finish and analyze the guarded-safety full `12146` run.
-2. If full guarded-safety beats full baseline, repeat with K=256 original WoTE
-   anchors/cache.
-3. Run UTMR sensitivity around:
+1. Repeat guarded-safety evaluation with K=256 original WoTE anchors/cache to
+   separate the K=64 subset effect from the UTMR reranking effect.
+2. Run UTMR sensitivity around:
    - `UTMR_FINE_MARGIN_MIN = 0.10, 0.15, 0.20`
    - `UTMR_MAX_COARSE_DROP = 0.2, 0.5`
    - `UTMR_TOP_N = 8, 16`
-4. Run AWSIM/Autoware live batch after topic probing.
+3. Run AWSIM/Autoware live batch after topic probing.
+4. Convert the final full/subset/sensitivity results into paper-ready tables
+   and figures.
