@@ -472,7 +472,9 @@ AWSIM live path도 실행했습니다. 초기에는 localization init이
 `The vehicle is not stopped.`로 실패하거나 route success가 `0%`였지만,
 현재는 Autoware stopped-condition을 맞추고 route fastpath를 정리해
 AWSIM + Autoware + UTMR planner + reducer가 observed closed-loop row를
-만드는 상태까지 도달했습니다.
+만드는 상태까지 도달했습니다. 추가로 turn-guidance smoke에서 route waypoint를
+planner route guidance로 주입해 live planner가 직진-only trajectory에 고정되지
+않는 것을 확인했습니다.
 
 | 코드 | 역할 |
 | --- | --- |
@@ -492,6 +494,7 @@ AWSIM + Autoware + UTMR planner + reducer가 observed closed-loop row를
 | `experiments/utmr/awsim_supervisor.py` | episode 단위 실행 supervisor |
 | `experiments/utmr/awsim_batch_runner.py` | variant batch 실행 |
 | `experiments/utmr/scenarios/awsim_shinjuku_sample.json` | AWSIM sample scenario |
+| `experiments/utmr/scenarios/awsim_shinjuku_turn_sample.json` | non-straight route-guidance smoke scenario |
 
 추가로 보강한 점:
 
@@ -512,6 +515,12 @@ AWSIM + Autoware + UTMR planner + reducer가 observed closed-loop row를
 - `/planning/clear_route`와 `/planning/set_waypoint_route`는 기본 off로 두었습니다.
   이 AWSIM/Autoware 조합에서는 두 서비스가 ROS CLI timeout을 크게 잡아먹고,
   ADAPI route service만으로 smoke에는 충분했습니다.
+- scenario `route_waypoints`를 ADAPI route request와 UTMR planner route
+  guidance에 모두 전달합니다.
+- `allow_synthetic_route_fallback: true`인 smoke/debug scenario에서는 ADAPI
+  route setup이 fail-closed 된 뒤 planner-only synthetic route publisher를
+  켭니다. 이 fallback은 route_ready를 위조하거나 gate unstop을 보내지
+  않습니다. 기본 benchmark path에서는 계속 off입니다.
 - localization service는 shell exit code가 아니라 응답의 `success=True`까지
   확인합니다.
 - localization retry마다 fresh stationary wait를 다시 수행합니다.
@@ -529,6 +538,27 @@ AWSIM + Autoware + UTMR planner + reducer가 observed closed-loop row를
 ```text
 experiments/utmr/results/awsim_live_batch_5ep_readywait_20260714_142811
 ```
+
+Turn-guidance smoke:
+
+```text
+experiments/utmr/results/awsim_turn_guidance_smoke_20260714_164514
+scenario: experiments/utmr/scenarios/awsim_shinjuku_turn_sample.json
+UTMR_READY: 1 in the recorded smoke, before later safety hardening
+step rows: 524
+route_guided rows: 524 / 524
+route_target_y_m range: 2.6561 .. 10.2924
+distance_m: 5.3072
+success: False
+timeout: True
+```
+
+This is not a final performance result. It was added to debug the observed
+"drives straight" behavior. The ADAPI route service kept returning
+`The route is already set`, so the smoke used explicit synthetic route fallback.
+The useful evidence is that `/planning/trajectory` publication was route-guided
+for every recorded step. The later safety hardening keeps synthetic fallback
+planner-only unless the route service succeeds.
 
 | Method | Episodes | Collision source | Success | Fallback | Mean speed km/h | Driving score |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |

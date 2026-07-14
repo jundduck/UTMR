@@ -25,6 +25,7 @@ UTMR_GOAL_QY="${UTMR_GOAL_QY:--0.005042256930040435}"
 UTMR_GOAL_QZ="${UTMR_GOAL_QZ:-0.29035442036333825}"
 UTMR_GOAL_QW="${UTMR_GOAL_QW:-0.9569057733710663}"
 UTMR_ROUTE_LENGTH_M="${UTMR_ROUTE_LENGTH_M:-20.25}"
+UTMR_ROUTE_WAYPOINTS_YAML="${UTMR_ROUTE_WAYPOINTS_YAML:-[]}"
 UTMR_FALLBACK_X="${UTMR_FALLBACK_X:-$UTMR_INIT_X}"
 UTMR_FALLBACK_Y="${UTMR_FALLBACK_Y:-$UTMR_INIT_Y}"
 UTMR_FALLBACK_Z="${UTMR_FALLBACK_Z:-$UTMR_INIT_Z}"
@@ -61,6 +62,7 @@ export UTMR_GOAL_QX
 export UTMR_GOAL_QY
 export UTMR_GOAL_QZ
 export UTMR_GOAL_QW
+export UTMR_ROUTE_WAYPOINTS_YAML
 
 source /opt/ros/humble/setup.bash
 source "$SCRIPT_DIR/service_calls.sh"
@@ -114,11 +116,12 @@ echo "waiting for Autoware services..."
 sleep "$UTMR_SERVICE_INITIAL_WAIT_S"
 
 INIT_REQUEST="{method: 1, pose_with_covariance: [{header: {frame_id: map}, pose: {pose: {position: {x: $UTMR_INIT_X, y: $UTMR_INIT_Y, z: $UTMR_INIT_Z}, orientation: {x: $UTMR_INIT_QX, y: $UTMR_INIT_QY, z: $UTMR_INIT_QZ, w: $UTMR_INIT_QW}}, covariance: $UTMR_INIT_COVARIANCE}}]}"
-ROUTE_REQUEST="{header: {frame_id: map}, option: {allow_goal_modification: true}, goal: {position: {x: $UTMR_GOAL_X, y: $UTMR_GOAL_Y, z: $UTMR_GOAL_Z}, orientation: {x: $UTMR_GOAL_QX, y: $UTMR_GOAL_QY, z: $UTMR_GOAL_QZ, w: $UTMR_GOAL_QW}}, waypoints: []}"
-WAYPOINT_ROUTE_REQUEST="{header: {frame_id: map}, goal_pose: {position: {x: $UTMR_GOAL_X, y: $UTMR_GOAL_Y, z: $UTMR_GOAL_Z}, orientation: {x: $UTMR_GOAL_QX, y: $UTMR_GOAL_QY, z: $UTMR_GOAL_QZ, w: $UTMR_GOAL_QW}}, waypoints: [], uuid: {uuid: $UTMR_ROUTE_UUID_BYTES}, allow_modification: true}"
+ROUTE_REQUEST="{header: {frame_id: map}, option: {allow_goal_modification: true}, goal: {position: {x: $UTMR_GOAL_X, y: $UTMR_GOAL_Y, z: $UTMR_GOAL_Z}, orientation: {x: $UTMR_GOAL_QX, y: $UTMR_GOAL_QY, z: $UTMR_GOAL_QZ, w: $UTMR_GOAL_QW}}, waypoints: $UTMR_ROUTE_WAYPOINTS_YAML}"
+WAYPOINT_ROUTE_REQUEST="{header: {frame_id: map}, goal_pose: {position: {x: $UTMR_GOAL_X, y: $UTMR_GOAL_Y, z: $UTMR_GOAL_Z}, orientation: {x: $UTMR_GOAL_QX, y: $UTMR_GOAL_QY, z: $UTMR_GOAL_QZ, w: $UTMR_GOAL_QW}}, waypoints: $UTMR_ROUTE_WAYPOINTS_YAML, uuid: {uuid: $UTMR_ROUTE_UUID_BYTES}, allow_modification: true}"
 utmr_run_localization_and_route "$INIT_REQUEST" "$ROUTE_REQUEST"
+utmr_apply_synthetic_route_fallback || true
 
-if [[ "$localization_ready" == "1" && "$route_ready" == "1" ]]; then
+if [[ "$localization_ready" == "1" && ( "$route_ready" == "1" || "${synthetic_route_fallback_active:-0}" == "1" ) ]]; then
   if [[ "${UTMR_START_ROUTE_PUBLISHER:-0}" != "0" ]]; then
     start_helper route_publisher "$HELPER_DIR/route_publisher.py" "$(helper_log utmr-route-publisher.log)"
   fi
@@ -145,6 +148,6 @@ fi
 if utmr_readiness_success; then
   echo "done. UTMR_READY=1 planner mode=$UTMR_MODE, step log=$UTMR_STEP_LOG"
 else
-  echo "degraded. UTMR_READY=0 localization_ready=$localization_ready route_ready=$route_ready operation_ready=$operation_ready gate_ready=$gate_ready planner mode=$UTMR_MODE, step log=$UTMR_STEP_LOG"
+  echo "degraded. UTMR_READY=0 localization_ready=$localization_ready route_ready=$route_ready operation_ready=$operation_ready gate_ready=$gate_ready synthetic_route_fallback_active=${synthetic_route_fallback_active:-0} planner mode=$UTMR_MODE, step log=$UTMR_STEP_LOG"
   exit 2
 fi

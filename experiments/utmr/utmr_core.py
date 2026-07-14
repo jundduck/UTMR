@@ -242,6 +242,14 @@ class HeuristicTrajectoryScorer:
         xy = trajectories[:, :, :2].astype(np.float64)
         times = np.arange(1, trajectories.shape[1] + 1, dtype=np.float64) * dt_s
         for obstacle in obstacles:
+            if not all(math.isfinite(value) for value in (obstacle.x_m, obstacle.y_m, obstacle.radius_m)):
+                collision[:] = True
+                ttc[:] = 0.0
+                continue
+            if obstacle.radius_m <= 0.0:
+                collision[:] = True
+                ttc[:] = 0.0
+                continue
             center = np.asarray([obstacle.x_m, obstacle.y_m], dtype=np.float64)
             threshold = self.config.ego_radius_m + obstacle.radius_m
             distances = np.linalg.norm(xy - center[None, None, :], axis=2)

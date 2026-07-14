@@ -19,6 +19,7 @@ if [[ "$1" == "service" && "$2" == "list" ]]; then
   cat <<'SERVICES'
 /localization/initialize
 /api/routing/clear_route
+/planning/clear_route
 /api/routing/set_route_points
 /system/operation_mode/change_operation_mode
 /control/vehicle_cmd_gate/set_stop
@@ -174,6 +175,171 @@ if grep -qx '/control/vehicle_cmd_gate/set_stop' "$operation_failure_log"; then
   echo "gate service was called despite failed operation mode" >&2
   exit 1
 fi
+
+UTMR_ACCEPT_ROUTE_ALREADY_SET=0 \
+UTMR_CLEAR_PLANNING_ROUTE_BEFORE_SET=1 \
+UTMR_TEST_LOCALIZATION_SUCCESS=1 \
+UTMR_TEST_ROUTE_ALREADY_SET=1 \
+UTMR_TEST_OPERATION_SUCCESS=1 \
+  run_readiness_case route_already_set_rejected
+route_already_set_rejected_log="$READINESS_CASE_LOG"
+
+if [[ "$localization_ready" != "1" || "$route_ready" != "0" || "$operation_ready" != "0" || "$gate_ready" != "0" ]]; then
+  echo "expected stale route rejection to block operation and gate readiness" >&2
+  exit 1
+fi
+
+expected_rejected_calls="$TMP_ROOT/expected_rejected.calls.log"
+cat >"$expected_rejected_calls" <<'EOF'
+WAIT_STATIONARY
+/localization/initialize
+/api/routing/clear_route
+/planning/clear_route
+/api/routing/set_route_points
+/api/routing/set_route_points
+EOF
+if ! diff -u "$expected_rejected_calls" "$route_already_set_rejected_log"; then
+  echo "expected stale route rejection to stop after route set failure" >&2
+  exit 1
+fi
+
+localization_ready=1
+route_ready=0
+synthetic_route_fallback_active=0
+UTMR_START_ROUTE_PUBLISHER=0
+UTMR_ALLOW_SYNTHETIC_ROUTE_FALLBACK=1 \
+  utmr_apply_synthetic_route_fallback >"$TMP_ROOT/synthetic_fallback.out"
+if [[ "$route_ready" != "0" || "$synthetic_route_fallback_active" != "1" || "$UTMR_START_ROUTE_PUBLISHER" != "1" ]]; then
+  echo "expected synthetic route fallback to enable planner-only publisher without marking route ready" >&2
+  exit 1
+fi
+
+localization_ready=0
+route_ready=0
+synthetic_route_fallback_active=0
+UTMR_START_ROUTE_PUBLISHER=0
+if UTMR_ALLOW_SYNTHETIC_ROUTE_FALLBACK=1 utmr_apply_synthetic_route_fallback >"$TMP_ROOT/synthetic_fallback_blocked.out"; then
+  echo "synthetic route fallback should not run before localization is ready" >&2
+  exit 1
+fi
+
+python3 - "$ROOT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+
+from experiments.utmr.awsim_supervisor import load_scenario, scenario_env  # noqa: E402
+
+
+class Args:
+    scenario_file = root / "experiments/utmr/scenarios/awsim_shinjuku_turn_sample.json"
+    scenario_id = None
+    scenario_index = 0
+
+
+base_scenario = load_scenario(Args)
+env = scenario_env(base_scenario)
+route_points = json.loads(env["UTMR_ROUTE_POINTS_JSON"])
+assert route_points[0]["x"] == 81383.82
+assert "81383.82" in env["UTMR_ROUTE_WAYPOINTS_YAML"]
+assert env["UTMR_ACCEPT_ROUTE_ALREADY_SET"] == "0"
+assert env["UTMR_ALLOW_SYNTHETIC_ROUTE_FALLBACK"] == "1"
+assert "UTMR_START_ROUTE_PUBLISHER" not in env
+assert "UTMR_CLEAR_PLANNING_ROUTE_BEFORE_SET" not in env
+
+bad_bool_file = root / "experiments/utmr/results/bad_bool_scenario.json"
+bad_bool_file.parent.mkdir(parents=True, exist_ok=True)
+bad_bool = {"scenarios": [{**base_scenario, "allow_synthetic_route_fallback": "false"}]}
+bad_bool_file.write_text(json.dumps(bad_bool), encoding="utf-8")
+
+class BadBoolArgs:
+    scenario_file = bad_bool_file
+    scenario_id = None
+    scenario_index = 0
+
+
+try:
+    scenario_env(load_scenario(BadBoolArgs))
+except ValueError as exc:
+    assert "allow_synthetic_route_fallback" in str(exc)
+else:
+    raise AssertionError("string fallback boolean must be rejected")
+
+bad_nan_file = root / "experiments/utmr/results/bad_nan_scenario.json"
+bad_nan = {
+    "scenarios": [
+        {
+            **base_scenario,
+            "route_waypoints": [{"x": 81383.82, "y": float("nan"), "z": 41.3}],
+        }
+    ]
+}
+bad_nan_file.write_text(json.dumps(bad_nan), encoding="utf-8")
+
+class BadNanArgs:
+    scenario_file = bad_nan_file
+    scenario_id = None
+    scenario_index = 0
+
+
+try:
+    scenario_env(load_scenario(BadNanArgs))
+except ValueError as exc:
+    assert "finite" in str(exc)
+else:
+    raise AssertionError("non-finite route values must be rejected")
+
+bad_goal_file = root / "experiments/utmr/results/bad_goal_scenario.json"
+bad_goal = {
+    "scenarios": [
+        {
+            **base_scenario,
+            "goal_pose": {**base_scenario["goal_pose"], "x": float("inf")},
+        }
+    ]
+}
+bad_goal_file.write_text(json.dumps(bad_goal), encoding="utf-8")
+
+class BadGoalArgs:
+    scenario_file = bad_goal_file
+    scenario_id = None
+    scenario_index = 0
+
+
+try:
+    scenario_env(load_scenario(BadGoalArgs))
+except ValueError as exc:
+    assert "UTMR_GOAL_x" in str(exc)
+else:
+    raise AssertionError("non-finite goal values must be rejected")
+
+bad_obstacle_file = root / "experiments/utmr/results/bad_obstacle_scenario.json"
+bad_obstacle = {
+    "scenarios": [
+        {
+            **base_scenario,
+            "obstacles": [{"x_m": 0.0, "y_m": 0.0, "radius_m": float("nan")}],
+        }
+    ]
+}
+bad_obstacle_file.write_text(json.dumps(bad_obstacle), encoding="utf-8")
+
+class BadObstacleArgs:
+    scenario_file = bad_obstacle_file
+    scenario_id = None
+    scenario_index = 0
+
+
+try:
+    scenario_env(load_scenario(BadObstacleArgs))
+except ValueError as exc:
+    assert "obstacles[0].radius" in str(exc)
+else:
+    raise AssertionError("non-finite obstacle values must be rejected")
+PY
 
 UTMR_TEST_LOCALIZATION_SUCCESS=1 \
 UTMR_TEST_ROUTE_ALREADY_SET=0 \

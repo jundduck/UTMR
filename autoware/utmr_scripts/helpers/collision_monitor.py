@@ -21,14 +21,27 @@ def parse_obstacles(text: str):
     if not text:
         return []
     data = json.loads(text)
-    return [
-        (
-            float(item["x_m"]),
-            float(item["y_m"]),
-            float(item.get("radius_m", 1.0)),
-        )
-        for item in data
-    ]
+    if not isinstance(data, list):
+        raise ValueError("obstacles must be a JSON list")
+    obstacles = []
+    for index, item in enumerate(data):
+        if not isinstance(item, dict):
+            raise ValueError(f"obstacle {index} must be an object")
+        x_value = item.get("x_m", item.get("x"))
+        y_value = item.get("y_m", item.get("y"))
+        if x_value is None or y_value is None:
+            raise ValueError(f"obstacle {index} is missing x/y")
+        x_m = float(x_value)
+        y_m = float(y_value)
+        radius_m = float(item.get("radius_m", item.get("radius", 1.0)))
+        if not all(math.isfinite(value) for value in (x_m, y_m, radius_m)):
+            raise ValueError(f"obstacle {index} contains non-finite values")
+        if abs(x_m) > 10_000_000.0 or abs(y_m) > 10_000_000.0:
+            raise ValueError(f"obstacle {index} is outside supported map bounds")
+        if radius_m <= 0.0 or radius_m > 1_000.0:
+            raise ValueError(f"obstacle {index} radius is outside supported bounds")
+        obstacles.append((x_m, y_m, radius_m))
+    return obstacles
 
 
 def yaw_from_quat(q) -> float:

@@ -86,14 +86,24 @@ def pose_to_env(prefix: str, pose: Dict[str, object]) -> Dict[str, str]:
         "qz": ["qz", "orientation_z"],
         "qw": ["qw", "orientation_w"],
     }
+    bounds = {
+        "x": (-10_000_000.0, 10_000_000.0),
+        "y": (-10_000_000.0, 10_000_000.0),
+        "z": (-10_000.0, 10_000.0),
+        "qx": (-1.1, 1.1),
+        "qy": (-1.1, 1.1),
+        "qz": (-1.1, 1.1),
+        "qw": (-1.1, 1.1),
+    }
     for target, keys in aliases.items():
         for key in keys:
             if key in pose:
-                env[f"{prefix}_{target.upper()}"] = str(pose[key])
+                lower, upper = bounds[target]
+                env[f"{prefix}_{target.upper()}"] = str(finite_float(pose[key], f"{prefix}_{target}", lower, upper))
                 break
     yaw = pose.get("yaw_rad", pose.get("yaw"))
     if yaw is not None and f"{prefix}_QZ" not in env and f"{prefix}_QW" not in env:
-        yaw_rad = float(yaw)
+        yaw_rad = finite_float(yaw, f"{prefix}_yaw", -100.0, 100.0)
         env[f"{prefix}_QX"] = "0.0"
         env[f"{prefix}_QY"] = "0.0"
         env[f"{prefix}_QZ"] = str(math.sin(yaw_rad * 0.5))
@@ -117,6 +127,101 @@ def yaw_from_pose(pose: Dict[str, object]) -> float | None:
     return math.atan2(siny_cosp, cosy_cosp)
 
 
+def finite_float(value: object, label: str, lower: float, upper: float) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be numeric, not boolean")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{label} must be finite")
+    if number < lower or number > upper:
+        raise ValueError(f"{label}={number} outside [{lower}, {upper}]")
+    return number
+
+
+def scenario_bool(scenario: Dict[str, object], key: str) -> bool:
+    if key not in scenario:
+        return False
+    value = scenario[key]
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be a JSON boolean")
+    return value
+
+
+def normalize_route_points(points: list[object]) -> list[Dict[str, float]]:
+    normalized: list[Dict[str, float]] = []
+    for index, item in enumerate(points):
+        if isinstance(item, dict):
+            x_value = item.get("x", item.get("x_m"))
+            y_value = item.get("y", item.get("y_m"))
+            z_value = item.get("z", item.get("z_m", 0.0))
+        elif isinstance(item, list):
+            values = list(item)
+            x_value = values[0] if len(values) > 0 else None
+            y_value = values[1] if len(values) > 1 else None
+            z_value = values[2] if len(values) > 2 else 0.0
+        else:
+            raise ValueError(f"route point {index} must be an object or list")
+        if x_value is None or y_value is None:
+            raise ValueError(f"route point {index} is missing x/y")
+        normalized.append(
+            {
+                "x": finite_float(x_value, f"route_points[{index}].x", -10_000_000.0, 10_000_000.0),
+                "y": finite_float(y_value, f"route_points[{index}].y", -10_000_000.0, 10_000_000.0),
+                "z": finite_float(z_value, f"route_points[{index}].z", -10_000.0, 10_000.0),
+            }
+        )
+    return normalized
+
+
+def normalize_obstacles(items: object) -> List[Dict[str, object]]:
+    if not isinstance(items, list):
+        raise ValueError("obstacles must be a JSON list")
+    obstacles: List[Dict[str, object]] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ValueError(f"obstacle {index} must be an object")
+        x_value = item.get("x_m", item.get("x"))
+        y_value = item.get("y_m", item.get("y"))
+        if x_value is None or y_value is None:
+            raise ValueError(f"obstacle {index} is missing x/y")
+        radius_value = item.get("radius_m", item.get("radius", 1.0))
+        obstacles.append(
+            {
+                "x_m": finite_float(x_value, f"obstacles[{index}].x", -10_000_000.0, 10_000_000.0),
+                "y_m": finite_float(y_value, f"obstacles[{index}].y", -10_000_000.0, 10_000_000.0),
+                "radius_m": finite_float(radius_value, f"obstacles[{index}].radius", 1e-6, 1_000.0),
+                "label": str(item.get("label", f"obstacle_{index}")),
+            }
+        )
+    return obstacles
+
+
+def route_waypoints_yaml(points: list[object], fallback_orientation: Dict[str, object] | None) -> str:
+    if not points:
+        return "[]"
+    orientation = fallback_orientation or {}
+    default_qx = finite_float(orientation.get("qx", orientation.get("orientation_x", 0.0)), "route_default_qx", -1.1, 1.1)
+    default_qy = finite_float(orientation.get("qy", orientation.get("orientation_y", 0.0)), "route_default_qy", -1.1, 1.1)
+    default_qz = finite_float(orientation.get("qz", orientation.get("orientation_z", 0.0)), "route_default_qz", -1.1, 1.1)
+    default_qw = finite_float(orientation.get("qw", orientation.get("orientation_w", 1.0)), "route_default_qw", -1.1, 1.1)
+    rendered = []
+    for index, item in enumerate(points):
+        if not isinstance(item, dict):
+            raise ValueError("route_waypoints_yaml requires normalized route point dictionaries")
+        qx = finite_float(item.get("qx", item.get("orientation_x", default_qx)), f"route_points[{index}].qx", -1.1, 1.1)
+        qy = finite_float(item.get("qy", item.get("orientation_y", default_qy)), f"route_points[{index}].qy", -1.1, 1.1)
+        qz = finite_float(item.get("qz", item.get("orientation_z", default_qz)), f"route_points[{index}].qz", -1.1, 1.1)
+        qw = finite_float(item.get("qw", item.get("orientation_w", default_qw)), f"route_points[{index}].qw", -1.1, 1.1)
+        rendered.append(
+            "{position: {x: "
+            f"{item['x']}, y: {item['y']}, z: {item['z']}"
+            "}, orientation: {x: "
+            f"{qx}, y: {qy}, z: {qz}, w: {qw}"
+            "}}"
+        )
+    return "[" + ", ".join(rendered) + "]"
+
+
 def scenario_env(scenario: Dict[str, object]) -> Dict[str, str]:
     if not scenario:
         return {}
@@ -125,24 +230,47 @@ def scenario_env(scenario: Dict[str, object]) -> Dict[str, str]:
     goal_pose = scenario.get("goal_pose") or scenario.get("goal")
     if isinstance(initial_pose, dict):
         env.update(pose_to_env("UTMR_INIT", initial_pose))
-        if "x" in initial_pose or "x_m" in initial_pose:
-            env["UTMR_FALLBACK_X"] = str(initial_pose.get("x", initial_pose.get("x_m")))
-        if "y" in initial_pose or "y_m" in initial_pose:
-            env["UTMR_FALLBACK_Y"] = str(initial_pose.get("y", initial_pose.get("y_m")))
-        if "z" in initial_pose or "z_m" in initial_pose:
-            env["UTMR_FALLBACK_Z"] = str(initial_pose.get("z", initial_pose.get("z_m")))
+        if "UTMR_INIT_X" in env:
+            env["UTMR_FALLBACK_X"] = env["UTMR_INIT_X"]
+        if "UTMR_INIT_Y" in env:
+            env["UTMR_FALLBACK_Y"] = env["UTMR_INIT_Y"]
+        if "UTMR_INIT_Z" in env:
+            env["UTMR_FALLBACK_Z"] = env["UTMR_INIT_Z"]
         yaw = yaw_from_pose(initial_pose)
         if yaw is not None:
             env["UTMR_FALLBACK_YAW"] = str(yaw)
     if isinstance(goal_pose, dict):
         env.update(pose_to_env("UTMR_GOAL", goal_pose))
     if "route_length_m" in scenario:
-        env["UTMR_ROUTE_LENGTH_M"] = str(scenario["route_length_m"])
+        env["UTMR_ROUTE_LENGTH_M"] = str(finite_float(scenario["route_length_m"], "route_length_m", 0.0, 100_000.0))
     if "goal_radius_m" in scenario:
-        env["UTMR_GOAL_RADIUS_M"] = str(scenario["goal_radius_m"])
+        env["UTMR_GOAL_RADIUS_M"] = str(finite_float(scenario["goal_radius_m"], "goal_radius_m", 0.0, 1_000.0))
     if "obstacles" in scenario:
-        env["UTMR_OBSTACLES_JSON"] = json.dumps(scenario["obstacles"], separators=(",", ":"))
+        env["UTMR_OBSTACLES_JSON"] = json.dumps(normalize_obstacles(scenario["obstacles"]), separators=(",", ":"))
         env["UTMR_STATIC_OBSTACLE_FRAME"] = str(scenario.get("obstacle_frame", "ego"))
+    route_points_raw = scenario.get("route_points", scenario.get("route_waypoints", scenario.get("waypoints")))
+    if isinstance(route_points_raw, list):
+        route_points = normalize_route_points(route_points_raw)
+        env["UTMR_ROUTE_POINTS_JSON"] = json.dumps(route_points, separators=(",", ":"))
+        env["UTMR_ROUTE_WAYPOINTS_YAML"] = route_waypoints_yaml(
+            route_points,
+            goal_pose if isinstance(goal_pose, dict) else None,
+        )
+        env["UTMR_ACCEPT_ROUTE_ALREADY_SET"] = "0"
+    for source_key, env_key in {
+        "route_lookahead_m": "UTMR_ROUTE_LOOKAHEAD_M",
+        "route_max_lateral_m": "UTMR_ROUTE_MAX_LATERAL_M",
+        "route_max_yaw_rad": "UTMR_ROUTE_MAX_YAW_RAD",
+    }.items():
+        if source_key in scenario:
+            bounds = {
+                "route_lookahead_m": (1.0, 200.0),
+                "route_max_lateral_m": (0.0, 50.0),
+                "route_max_yaw_rad": (0.0, 1.57),
+            }[source_key]
+            env[env_key] = str(finite_float(scenario[source_key], source_key, bounds[0], bounds[1]))
+    if scenario_bool(scenario, "allow_synthetic_route_fallback"):
+        env["UTMR_ALLOW_SYNTHETIC_ROUTE_FALLBACK"] = "1"
     return env
 
 

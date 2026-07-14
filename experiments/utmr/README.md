@@ -97,10 +97,44 @@ Current AWSIM defaults:
   localization startup is slow.
 - `UTMR_START_ROUTE_PUBLISHER=0` by default for AWSIM live runs. Enable it only
   when you intentionally want the synthetic route publisher.
+- Scenario files can provide `route_waypoints` / `waypoints`. These are passed
+  both to Autoware's ADAPI route request and to the UTMR planner as route
+  guidance points. This prevents the live planner from falling back to
+  obstacle-free near-straight candidates on turn routes.
+- If a scenario sets `allow_synthetic_route_fallback: true`, `run_utmr_demo.sh`
+  fails closed on stale ADAPI route responses, then enables a synthetic
+  `/planning/mission_planning/route` publisher for planner-only smoke/debug.
+  It does not mark the route service ready and does not release the vehicle
+  command gate without a verified route.
+- Route-guided trajectories are rechecked before publication: non-finite
+  values, static/dynamic obstacle collisions, invalid obstacle radii, and
+  lateral offsets outside the UTMR drivable envelope fall back to the original
+  UTMR-selected candidate.
 - `UTMR_SET_PLANNING_WAYPOINT_ROUTE=0` and
   `UTMR_CLEAR_PLANNING_ROUTE_BEFORE_SET=0` by default, because the ADAPI route
   service is enough for the current smoke and the planning services can consume
   the full ROS CLI timeout in this build.
+
+Turn-guidance AWSIM smoke evidence:
+
+```text
+experiments/utmr/results/awsim_turn_guidance_smoke_20260714_164514
+scenario: experiments/utmr/scenarios/awsim_shinjuku_turn_sample.json
+UTMR_READY: 1 in the recorded smoke, before later safety hardening
+step rows: 524
+route_guided rows: 524 / 524
+route_target_y_m range: 2.6561 .. 10.2924
+distance_m: 5.3072
+mean_speed_kmh: 0.3658
+success: False, timeout: True
+```
+
+This run confirms that live UTMR trajectory publishing is no longer
+straight-only on a turn route. It is still a smoke/debug episode: the route
+service returned `The route is already set`, so the synthetic route fallback was
+used, and the short 45 s episode timed out before reaching the 28 m route goal.
+After the safety hardening, synthetic fallback remains planner-only unless a
+real route service succeeds.
 
 Latest repeated AWSIM batch evidence:
 

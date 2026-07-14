@@ -39,7 +39,7 @@ The repository contains the source needed to reproduce the current experiments:
 | `autoware/utmr_scripts/run_straight_demo.sh` | Straight trajectory smoke launcher using the shared fail-closed readiness sequence. |
 | `autoware/utmr_scripts/service_calls.sh` | Shell helper for Autoware service retry and response-pattern validation. |
 | `autoware/utmr_scripts/service_readiness.sh` | Production readiness sequence for localization, route, operation mode, and gate unstop. |
-| `experiments/utmr/test_service_calls.sh` | Fake-ROS shell test for localization-failure and operation-failure gate behavior. |
+| `experiments/utmr/test_service_calls.sh` | Fake-ROS shell test for localization-failure, stale-route, and operation-failure gate behavior. |
 
 Large folders are intentionally not tracked: NAVSIM logs, sensor blobs, metric
 cache, checkpoints, Autoware builds, AWSIM binaries, raw result logs, and local
@@ -289,6 +289,15 @@ Implemented pieces:
 - Synthetic `route_publisher.py` is available but off by default for AWSIM live
   runs, because publishing an empty synthetic route polluted
   `/planning/mission_planning/route`.
+- Scenario `route_waypoints` are passed into the ADAPI route request and into
+  `utmr_planner_node.py` as route-guidance points. This prevents the live
+  planner from choosing only obstacle-free near-straight candidates on a turn
+  route.
+- `allow_synthetic_route_fallback: true` is available for smoke/debug
+  scenarios. It keeps the default benchmark path clean, but lets a turn smoke
+  start a planner-only synthetic `/planning/mission_planning/route` publisher
+  after ADAPI route setup fails closed. It does not mark route readiness or
+  release the vehicle command gate without a verified route.
 - `/planning/clear_route` and `/planning/set_waypoint_route` are optional and
   off by default because this AWSIM/Autoware combination can spend the full ROS
   CLI timeout on those services while ADAPI route setup is enough for the smoke.
@@ -323,7 +332,20 @@ experiments/utmr/results/awsim_route_clear_fastpath_20260714_134344
 experiments/utmr/results/awsim_live_batch_fastpath_20260714_134703
 experiments/utmr/results/awsim_post_retry_wait_smoke_20260714_140249
 experiments/utmr/results/awsim_live_batch_5ep_readywait_20260714_142811
+experiments/utmr/results/awsim_turn_guidance_smoke_20260714_164514
 ```
+
+Turn-guidance smoke:
+
+| Scenario | Step rows | Route-guided | Route target y range | Distance | Result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `awsim_shinjuku_turn_sample.json` | 524 | 524 / 524 | 2.6561 .. 10.2924 m | 5.3072 m | timeout before 28 m goal |
+
+This smoke used the explicit synthetic route fallback because ADAPI route setup
+kept returning `The route is already set`. It is not a final closed-loop score,
+but it verifies the live planner is no longer publishing only straight
+trajectories: every recorded step had `route_guided=true`. The later safety
+hardening keeps this fallback planner-only unless the route service succeeds.
 
 Main repeated live batch configuration:
 
@@ -368,8 +390,10 @@ Interpretation:
 - The previous `The vehicle is not stopped` blocker is mitigated by using the
   same stop-check topic/threshold/duration as Autoware's pose initializer and
   by retrying localization only after a fresh stopped check.
-- Route setup no longer depends on the synthetic route publisher or the slow
-  planning waypoint service.
+- The main repeated batch route setup does not depend on the synthetic route
+  publisher or the slow planning waypoint service. The turn-guidance smoke uses
+  synthetic route fallback explicitly as a planner-only debug path when ADAPI
+  route setup fails closed.
 - A diagnostic 5-episode attempt before the readiness wait fix produced one
   fallback row when readiness consumed the fixed timeout. The latest run has
   no fallback rows because episode timing starts after readiness exits.
@@ -528,6 +552,6 @@ experiments/utmr/check_assets.sh
 ## Next Experiments
 
 1. Decide whether to retune a separate K256 guard/weight setting.
-2. Improve AWSIM route-success scenario and repeat live batch with more episodes.
+2. Improve AWSIM route-success/turn scenarios and repeat live batch with more episodes.
 3. Convert the final full/subset/sensitivity/live results into paper-ready tables
    and figures.

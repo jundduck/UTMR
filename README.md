@@ -30,6 +30,7 @@ UTMR가 baseline보다 높은 결과를 냈습니다.
 | WoTE baseline | 1000 | 1000 / 0 | 0.8638675087 | subset 기준선 |
 | UTMR guarded safety | 1000 | 1000 / 0 | 0.8720460220 | tuning용 subset 결과 |
 | AWSIM live repeated batch | 5 variants x 5 episodes | 25 / 0 fallback rows | success 100%, collision source unverified | live closed-loop 반복 실행 성공 |
+| AWSIM turn-guidance smoke | 45 s | 524 / 524 route-guided steps | distance 5.31 m, timeout | live planner가 더 이상 직진만 하지 않음을 확인 |
 
 `UTMR guarded safety`는 baseline 후보를 무조건 바꾸지 않고, fine metric
 score가 충분히 좋아지고 coarse score 손실이 제한될 때만 rerank를 받아들이는
@@ -74,7 +75,9 @@ AWSIM/Autoware live path도 실제로 실행했습니다. 이전에는 localizat
 현재는 Autoware stop-check topic 기준 stationary wait, automatic pose
 initializer 비활성화, stale route clear, synthetic route publisher 기본 off,
 planning waypoint route 기본 off를 적용해 sample scenario에서 observed
-closed-loop episode CSV를 생성합니다.
+closed-loop episode CSV를 생성합니다. 별도 turn-guidance smoke에서는
+`route_waypoints`를 UTMR planner route guidance에도 넣어 live trajectory가
+직진-only fallback으로 고정되지 않게 했습니다.
 
 | 코드 | 역할 |
 | --- | --- |
@@ -93,6 +96,29 @@ closed-loop episode CSV를 생성합니다.
 | `experiments/utmr/awsim_supervisor.py` | Autoware/AWSIM helper process를 묶어 episode 단위로 실행합니다. readiness가 끝난 뒤에만 driving timeout을 시작합니다. |
 | `experiments/utmr/awsim_batch_runner.py` | baseline, utmr, ablation variant를 batch로 실행합니다. `--readiness-timeout-s`를 supervisor에 전달합니다. |
 | `autoware/utmr_scripts/probe_live_topics.sh` | 실제 AWSIM/Autoware topic 이름을 probe합니다. |
+
+Turn-guidance smoke:
+
+```text
+experiments/utmr/results/awsim_turn_guidance_smoke_20260714_164514
+scenario: experiments/utmr/scenarios/awsim_shinjuku_turn_sample.json
+UTMR_READY: 1 in the recorded smoke, before later safety hardening
+step rows: 524
+route_guided rows: 524 / 524
+route_target_y_m range: 2.6561 .. 10.2924
+distance_m: 5.3072
+mean_speed_kmh: 0.3658
+success: False, timeout: True
+```
+
+이 smoke는 최종 성능 실험이 아니라 live planner 디버그입니다. ADAPI route
+service가 `The route is already set`을 계속 반환해서 명시 synthetic route
+fallback을 켰고, 짧은 45초 episode는 goal 도착 전에 timeout 됐습니다. 다만
+planner log와 step log 기준 live UTMR trajectory는 100% route-guided였고,
+route target lateral offset이 10 m 이상까지 커져 “계속 직진만 하는” 상태는
+해결됐습니다. 이후 safety hardening으로 synthetic fallback은 더 이상 route
+ready를 위조하거나 gate unstop을 보내지 않고, planner-only debug 경로로만
+남았습니다.
 
 최신 live batch:
 

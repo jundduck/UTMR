@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import rclpy
 from rclpy._rclpy_pybind11 import RCLError
 from autoware_localization_msgs.msg import KinematicState
@@ -48,15 +49,71 @@ def parse_obstacles(text: str) -> list[Obstacle]:
     if not text:
         return []
     data = json.loads(text)
-    return [
-        Obstacle(
-            x_m=float(item["x_m"]),
-            y_m=float(item["y_m"]),
-            radius_m=float(item.get("radius_m", 1.0)),
-            label=str(item.get("label", "obstacle")),
-        )
-        for item in data
-    ]
+    if not isinstance(data, list):
+        raise ValueError("obstacles must be a JSON list")
+    obstacles = []
+    for index, item in enumerate(data):
+        if not isinstance(item, dict):
+            raise ValueError(f"obstacle {index} must be an object")
+        x_value = item.get("x_m", item.get("x"))
+        y_value = item.get("y_m", item.get("y"))
+        if x_value is None or y_value is None:
+            raise ValueError(f"obstacle {index} is missing x/y")
+        x_m = float(x_value)
+        y_m = float(y_value)
+        radius_m = float(item.get("radius_m", item.get("radius", 1.0)))
+        if not all(math.isfinite(value) for value in (x_m, y_m, radius_m)):
+            raise ValueError(f"obstacle {index} contains non-finite values")
+        if abs(x_m) > 10_000_000.0 or abs(y_m) > 10_000_000.0:
+            raise ValueError(f"obstacle {index} is outside supported map bounds")
+        if radius_m <= 0.0 or radius_m > 1_000.0:
+            raise ValueError(f"obstacle {index} radius is outside supported bounds")
+        obstacles.append(Obstacle(x_m=x_m, y_m=y_m, radius_m=radius_m, label=str(item.get("label", "obstacle"))))
+    return obstacles
+
+
+def parse_route_points(text: str) -> list[tuple[float, float, float]]:
+    if not text:
+        return []
+    data = json.loads(text)
+    if not isinstance(data, list):
+        raise ValueError("route points must be a JSON list")
+    points = []
+    for index, item in enumerate(data):
+        if isinstance(item, dict):
+            x_value = item.get("x", item.get("x_m"))
+            y_value = item.get("y", item.get("y_m"))
+            z_value = item.get("z", item.get("z_m", 0.0))
+        elif isinstance(item, (list, tuple)):
+            if len(item) < 2:
+                raise ValueError(f"route point {index} is missing x/y")
+            x_value = item[0]
+            y_value = item[1]
+            z_value = item[2] if len(item) > 2 else 0.0
+        else:
+            raise ValueError(f"route point {index} must be an object or list")
+        if x_value is None or y_value is None:
+            raise ValueError(f"route point {index} is missing x/y")
+        point = (float(x_value), float(y_value), float(z_value))
+        if not all(math.isfinite(value) for value in point):
+            raise ValueError(f"route point {index} contains non-finite values")
+        if abs(point[0]) > 10_000_000.0 or abs(point[1]) > 10_000_000.0 or abs(point[2]) > 10_000.0:
+            raise ValueError(f"route point {index} is outside supported map bounds")
+        points.append(point)
+    return points
+
+
+def finite_env(name: str, default: str, lower: float, upper: float) -> float:
+    value = float(os.environ.get(name, default))
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite")
+    if value < lower or value > upper:
+        raise ValueError(f"{name}={value} outside [{lower}, {upper}]")
+    return value
+
+
+def clamp(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, value))
 
 
 def object_radius(shape) -> float:
@@ -100,6 +157,11 @@ class UTMRPlannerNode(Node):
         self.fallback_speed_mps = float(os.environ.get("UTMR_FALLBACK_SPEED_MPS", "8.0"))
         self.publish_horizon_s = float(os.environ.get("UTMR_PUBLISH_HORIZON_S", "4.0"))
         self.publish_dt_s = float(os.environ.get("UTMR_PUBLISH_DT_S", "0.2"))
+        self.route_guidance_enabled = os.environ.get("UTMR_ENABLE_ROUTE_GUIDANCE", "1") != "0"
+        self.route_lookahead_m = finite_env("UTMR_ROUTE_LOOKAHEAD_M", "25.0", 1.0, 200.0)
+        self.route_max_yaw_rad = finite_env("UTMR_ROUTE_MAX_YAW_RAD", "0.75", 0.0, 1.57)
+        self.route_max_lateral_m = finite_env("UTMR_ROUTE_MAX_LATERAL_M", "20.0", 0.0, 50.0)
+        self.route_points_map = self.load_route_points()
 
         self.config = UTMRRuntimeConfig(
             k=int(os.environ.get("UTMR_K", "64")),
@@ -159,10 +221,20 @@ class UTMRPlannerNode(Node):
     def on_objects(self, msg):
         obstacles = []
         for index, obj in enumerate(msg.objects):
-            if getattr(obj, "existence_probability", 1.0) < self.obstacle_min_probability:
+            probability = float(getattr(obj, "existence_probability", 1.0))
+            if not math.isfinite(probability):
+                obstacles.append(Obstacle(0.0, 0.0, self.config.ego_radius_m, f"invalid_object_{index}"))
+                continue
+            if probability < self.obstacle_min_probability:
                 continue
             pose = object_pose(obj)
             radius = object_radius(obj.shape)
+            if not all(math.isfinite(value) for value in (pose.position.x, pose.position.y, radius)):
+                obstacles.append(Obstacle(0.0, 0.0, self.config.ego_radius_m, f"invalid_object_{index}"))
+                continue
+            if radius <= 0.0 or radius > 1_000.0:
+                obstacles.append(Obstacle(0.0, 0.0, self.config.ego_radius_m, f"invalid_object_{index}"))
+                continue
             if math.hypot(pose.position.x, pose.position.y) > 1e6:
                 continue
             obstacles.append(Obstacle(pose.position.x, pose.position.y, radius, f"object_{index}"))
@@ -213,6 +285,86 @@ class UTMRPlannerNode(Node):
                 obstacles.append(local)
         return obstacles
 
+    def point_to_local(self, point: tuple[float, float, float], x: float, y: float, yaw: float) -> tuple[float, float]:
+        cos_yaw = math.cos(-yaw)
+        sin_yaw = math.sin(-yaw)
+        dx = point[0] - x
+        dy = point[1] - y
+        return cos_yaw * dx - sin_yaw * dy, sin_yaw * dx + cos_yaw * dy
+
+    def route_target_local(self, x: float, y: float, yaw: float) -> tuple[float, float] | None:
+        if not self.route_guidance_enabled or not self.route_points_map:
+            return None
+        local_points = [
+            self.point_to_local(point, x, y, yaw)
+            for point in self.route_points_map
+        ]
+        ahead_points = [point for point in local_points if point[0] > 1.0]
+        if not ahead_points:
+            return None
+        polyline = [(0.0, 0.0)] + ahead_points
+        remaining = max(1.0, self.route_lookahead_m)
+        for start, end in zip(polyline, polyline[1:]):
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            length = math.hypot(dx, dy)
+            if length < 1e-6:
+                continue
+            if remaining <= length:
+                ratio = remaining / length
+                return start[0] + dx * ratio, start[1] + dy * ratio
+            remaining -= length
+        return polyline[-1]
+
+    def apply_route_guidance(
+        self,
+        selected: np.ndarray,
+        route_target: tuple[float, float] | None,
+    ) -> tuple[np.ndarray, bool]:
+        if route_target is None:
+            return selected, False
+        target_x = max(2.0, float(route_target[0]))
+        target_y = clamp(float(route_target[1]), -self.route_max_lateral_m, self.route_max_lateral_m)
+        target_yaw = clamp(math.atan2(target_y, target_x), -self.route_max_yaw_rad, self.route_max_yaw_rad)
+        if abs(target_y) < 0.25 and abs(target_yaw) < 0.03:
+            return selected, False
+
+        guided = selected.copy()
+        end_slope = math.tan(target_yaw)
+        a = (target_x * end_slope - 2.0 * target_y) / (target_x ** 3)
+        b = (3.0 * target_y - target_x * end_slope) / (target_x ** 2)
+        for idx in range(guided.shape[0]):
+            local_x = max(0.0, float(guided[idx, 0]))
+            fit_x = min(local_x, target_x)
+            route_y = a * fit_x ** 3 + b * fit_x ** 2
+            route_slope = 3.0 * a * fit_x ** 2 + 2.0 * b * fit_x
+            if local_x > target_x:
+                route_y = target_y
+                route_slope = 0.0
+            guided[idx, 1] = float(route_y + guided[idx, 1])
+            guided[idx, 2] = float(math.atan(route_slope) + guided[idx, 2])
+        return guided, True
+
+    def trajectory_safety_reject_reason(self, trajectory: np.ndarray, obstacles: list[Obstacle]) -> str:
+        if not np.all(np.isfinite(trajectory)):
+            return "non_finite"
+        max_abs_y = float(np.max(np.abs(trajectory[:, 1]))) if trajectory.size else 0.0
+        if max_abs_y > self.config.lane_half_width_m:
+            return f"drivability:lateral={max_abs_y:.2f}"
+        if not obstacles:
+            return ""
+        xy = trajectory[:, :2].astype(np.float64)
+        for obstacle in obstacles:
+            if not all(math.isfinite(value) for value in (obstacle.x_m, obstacle.y_m, obstacle.radius_m)):
+                return f"obstacle_non_finite:{obstacle.label}"
+            if obstacle.radius_m <= 0.0 or obstacle.radius_m > 1_000.0:
+                return f"obstacle_radius:{obstacle.label}"
+            center = np.asarray([obstacle.x_m, obstacle.y_m], dtype=np.float64)
+            threshold = self.config.ego_radius_m + obstacle.radius_m
+            if bool(np.any(np.linalg.norm(xy - center[None, :], axis=1) <= threshold)):
+                return f"collision:{obstacle.label}"
+        return ""
+
     def publish_trajectory(self):
         start_time = time.perf_counter()
         x, y, z, yaw, speed = self.current_state()
@@ -225,6 +377,19 @@ class UTMRPlannerNode(Node):
         msg.header.frame_id = "map"
 
         selected = result.candidates.sample(self.publish_horizon_s, self.publish_dt_s)[result.selected_index]
+        route_target = self.route_target_local(x, y, yaw)
+        guided_selected, route_guided = self.apply_route_guidance(selected, route_target)
+        route_guidance_reject_reason = ""
+        if route_guided:
+            route_guidance_reject_reason = self.trajectory_safety_reject_reason(guided_selected, obstacles)
+            if route_guidance_reject_reason:
+                route_guided = False
+                self.get_logger().warning(
+                    f"rejected route-guided trajectory reason={route_guidance_reject_reason}; "
+                    "publishing original UTMR selection"
+                )
+            else:
+                selected = guided_selected
         cos_yaw = math.cos(yaw)
         sin_yaw = math.sin(yaw)
         for idx, pose in enumerate(selected):
@@ -249,16 +414,38 @@ class UTMRPlannerNode(Node):
             msg.points.append(point)
 
         self.publisher.publish(msg)
-        self.write_step_log(result, speed, latency_ms)
+        self.write_step_log(result, speed, latency_ms, route_target, route_guided, route_guidance_reject_reason)
 
         self.count += 1
         if self.count == 1 or self.count % 50 == 0:
+            route_text = ""
+            if route_target is not None:
+                route_text = f" route_target=({route_target[0]:.1f},{route_target[1]:.1f}) guided={route_guided}"
             self.get_logger().info(
                 f"published UTMR trajectory #{self.count} mode={self.mode} "
-                f"selected={result.selected_index} triggered={result.triggered}"
+                f"selected={result.selected_index} triggered={result.triggered}{route_text}"
             )
 
-    def write_step_log(self, result, speed_mps: float, latency_ms: float):
+    def load_route_points(self) -> list[tuple[float, float, float]]:
+        route_points = parse_route_points(
+            os.environ.get("UTMR_ROUTE_POINTS_JSON", os.environ.get("UTMR_ROUTE_WAYPOINTS_JSON", ""))
+        )
+        goal_x = os.environ.get("UTMR_GOAL_X")
+        goal_y = os.environ.get("UTMR_GOAL_Y")
+        if goal_x is not None and goal_y is not None:
+            goal_z = os.environ.get("UTMR_GOAL_Z", "0.0")
+            route_points.extend(parse_route_points(json.dumps([{"x": goal_x, "y": goal_y, "z": goal_z}])))
+        return route_points
+
+    def write_step_log(
+        self,
+        result,
+        speed_mps: float,
+        latency_ms: float,
+        route_target: tuple[float, float] | None,
+        route_guided: bool,
+        route_guidance_reject_reason: str,
+    ):
         if not self.log_path:
             return
         row = result.to_step_log(
@@ -268,6 +455,11 @@ class UTMRPlannerNode(Node):
         )
         row["method_variant"] = self.mode
         row["ego_speed_kmh"] = float(speed_mps * 3.6)
+        row["route_guided"] = bool(route_guided)
+        row["route_guidance_reject_reason"] = route_guidance_reject_reason
+        if route_target is not None:
+            row["route_target_x_m"] = float(route_target[0])
+            row["route_target_y_m"] = float(route_target[1])
         path = Path(self.log_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fp:

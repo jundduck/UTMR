@@ -44,6 +44,11 @@ utmr_run_localization_and_route() {
 
   utmr_clear_route_before_set
 
+  local route_success_pattern="success=True"
+  if [[ "${UTMR_ACCEPT_ROUTE_ALREADY_SET:-0}" != "0" ]]; then
+    route_success_pattern="success=True|The route is already set"
+  fi
+
   if utmr_call_service_with_retry \
     "ADAPI route set" \
     /api/routing/set_route_points \
@@ -51,7 +56,7 @@ utmr_run_localization_and_route() {
     "$route_request" \
     "$UTMR_SERVICE_RETRY_COUNT" \
     "$UTMR_SERVICE_RETRY_SLEEP_S" \
-    "success=True|The route is already set"; then
+    "$route_success_pattern"; then
     route_ready=1
   fi
 }
@@ -99,9 +104,9 @@ utmr_clear_route_before_set() {
     /api/routing/clear_route \
     autoware_adapi_v1_msgs/srv/ClearRoute \
     "{}" \
-    1 \
-    0 \
-    "response:|success=True|NO_EFFECT|code=60001|not set|not found" || true
+    "${UTMR_CLEAR_ROUTE_RETRY_COUNT:-$UTMR_SERVICE_RETRY_COUNT}" \
+    "${UTMR_CLEAR_ROUTE_RETRY_SLEEP_S:-$UTMR_SERVICE_RETRY_SLEEP_S}" \
+    "success=True|NO_EFFECT|code=60001|not set|not found" || true
 
   if [[ "${UTMR_CLEAR_PLANNING_ROUTE_BEFORE_SET:-0}" != "0" ]]; then
     utmr_call_service_with_retry \
@@ -109,9 +114,9 @@ utmr_clear_route_before_set() {
       /planning/clear_route \
       autoware_planning_msgs/srv/ClearRoute \
       "{}" \
-      1 \
-      0 \
-      "response:|success=True|NO_EFFECT|code=60001|not set|not found" || true
+      "${UTMR_CLEAR_ROUTE_RETRY_COUNT:-$UTMR_SERVICE_RETRY_COUNT}" \
+      "${UTMR_CLEAR_ROUTE_RETRY_SLEEP_S:-$UTMR_SERVICE_RETRY_SLEEP_S}" \
+      "success=True|NO_EFFECT|code=60001|not set|not found" || true
   fi
 }
 
@@ -147,6 +152,17 @@ utmr_run_operation_and_gate() {
   else
     echo "skip autonomous/gate services: localization_ready=$localization_ready route_ready=$route_ready"
   fi
+}
+
+utmr_apply_synthetic_route_fallback() {
+  if [[ "$localization_ready" == "1" && "$route_ready" != "1" && "${UTMR_ALLOW_SYNTHETIC_ROUTE_FALLBACK:-0}" != "0" ]]; then
+    echo "route service did not become ready; enabling synthetic route fallback for planner-only debug"
+    synthetic_route_fallback_active=1
+    UTMR_START_ROUTE_PUBLISHER=1
+    return 0
+  fi
+  synthetic_route_fallback_active=0
+  return 1
 }
 
 utmr_run_waypoint_route_if_requested() {
