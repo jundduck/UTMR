@@ -11,9 +11,11 @@ from rclpy._rclpy_pybind11 import RCLError
 from autoware_adapi_v1_msgs.msg import RouteState
 from autoware_localization_msgs.msg import KinematicState
 from helper_shutdown import is_expected_shutdown_error
+from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from rosidl_generator_py.import_type_support_impl import UnsupportedTypeSupport
 from std_msgs.msg import Bool
 
 
@@ -32,6 +34,8 @@ class EpisodeMetricMonitor(Node):
         self.goal_y = optional_float(os.environ.get("UTMR_GOAL_Y", ""))
         self.route_length_m = optional_float(os.environ.get("UTMR_ROUTE_LENGTH_M", ""))
         self.collision_topic = os.environ.get("UTMR_COLLISION_TOPIC", "")
+        self.kinematic_topic = os.environ.get("UTMR_KINEMATIC_TOPIC", "/localization/kinematic_state")
+        self.kinematic_msg_type = os.environ.get("UTMR_KINEMATIC_MSG_TYPE", "Odometry")
         self.route_state_topic = os.environ.get("UTMR_ROUTE_STATE_TOPIC", "/api/routing/state")
 
         self.started_wall = time.monotonic()
@@ -40,18 +44,47 @@ class EpisodeMetricMonitor(Node):
         self.speed_samples_kmh = []
         self.collision = False
         self.success = False
+        self.route_state_enabled = False
         self.row_written = False
 
-        self.create_subscription(KinematicState, "/localization/kinematic_state", self.on_kinematic_state, 10)
-        self.create_subscription(RouteState, self.route_state_topic, self.on_route_state, 10)
+        self.create_kinematic_subscription()
+        self.create_route_state_subscription()
         if self.collision_topic:
             self.create_subscription(Bool, self.collision_topic, self.on_collision, 10)
             self.get_logger().info(f"subscribed collision topic {self.collision_topic}")
         self.get_logger().info(f"metric monitor episode={self.episode_id} csv={self.episode_csv or '(disabled)'}")
 
+    def create_kinematic_subscription(self):
+        if self.kinematic_msg_type == "KinematicState":
+            self.create_subscription(KinematicState, self.kinematic_topic, self.on_kinematic_state, 10)
+        else:
+            if self.kinematic_msg_type != "Odometry":
+                self.get_logger().warning(f"unknown UTMR_KINEMATIC_MSG_TYPE={self.kinematic_msg_type}; using Odometry")
+            self.create_subscription(Odometry, self.kinematic_topic, self.on_odometry, 10)
+        self.get_logger().info(f"subscribed kinematic topic {self.kinematic_topic} as {self.kinematic_msg_type}")
+
+    def create_route_state_subscription(self):
+        try:
+            self.create_subscription(RouteState, self.route_state_topic, self.on_route_state, 10)
+            self.route_state_enabled = True
+            self.get_logger().info(f"subscribed route state topic {self.route_state_topic}")
+        except UnsupportedTypeSupport as exc:
+            self.route_state_enabled = False
+            self.get_logger().warning(
+                f"route state subscription disabled because type support is unavailable: {exc}"
+            )
+
     def on_kinematic_state(self, msg: KinematicState):
         pose = msg.pose_with_covariance.pose
         twist = msg.twist_with_covariance.twist
+        self.record_motion(pose, twist)
+
+    def on_odometry(self, msg: Odometry):
+        pose = msg.pose.pose
+        twist = msg.twist.twist
+        self.record_motion(pose, twist)
+
+    def record_motion(self, pose, twist):
         current = (pose.position.x, pose.position.y)
         if self.first_pose is None:
             self.first_pose = current
@@ -115,7 +148,7 @@ class EpisodeMetricMonitor(Node):
                     "mean_speed_kmh": mean_speed,
                     "driving_score": driving_score,
                     "metric_source": "observed",
-                    "metric_note": "",
+                    "metric_note": "" if self.route_state_enabled else "route_state_subscription_unavailable",
                 }
             )
         self.get_logger().info(f"wrote episode metrics to {path}")

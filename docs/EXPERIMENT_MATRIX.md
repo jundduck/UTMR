@@ -7,7 +7,7 @@
 | 구분 | 의미 | 논문 설정 여부 | 이번 결과 해석 |
 | --- | --- | --- | --- |
 | K64 | 한 planning step에서 후보 trajectory 64개 평가 | 예. 논문 본문 설정 | UTMR guarded safety가 baseline보다 높아 핵심 성공 결과 |
-| K256 | 후보 trajectory 256개 평가 | 아니오. WoTE 공개 원본 anchor 추가 검증 | baseline이 강하고 같은 guard UTMR는 약간 낮아 별도 tuning 필요 |
+| K256 | 후보 trajectory 256개 평가 | 아니오. WoTE 공개 원본 anchor 추가 검증 | baseline이 강하고 같은 guard UTMR는 약간 낮았지만, 별도 보수 guard는 subset에서 개선 |
 
 ## 전체 실험 표
 
@@ -34,6 +34,9 @@
 | 19 | AWSIM/Autoware live batch smoke | closed-loop/live pipeline 검증 | episode CSV + runtime 표 | 5 variants × 1 episode 실행, route success `0%`, collision `0%`, merged steps `1125` | smoke 완료, benchmark 아님 |
 | 20 | AWSIM route/control smoke | route와 command gate 병목 진단 | 로그 카운트 + CSV | route missing/waiting은 `0`; command/heartbeat 경고는 감소했지만 일부 남음 | smoke 완료, benchmark 아님 |
 | 21 | AWSIM dynamic TF smoke | sensor/localization TF mismatch 완화 | 로그 카운트 + CSV | observed metric row, `693` planner steps. route success는 아직 `0%` | smoke evidence 확보, benchmark 아님 |
+| 22 | AWSIM Odometry/service retry smoke | live helper가 실제 localization topic과 service 응답을 받는지 검증 | runtime topic probe + CSV | `/localization/kinematic_state` publisher가 `nav_msgs/Odometry`임을 확인. helper adapter 추가 후 metric 숫자 기록 가능. localization `success=False` 응답은 재시도 | blocker 일부 해결 |
+| 23 | K256 retune 300 | K256 별도 guard 후보 탐색 | PDM score 표 | baseline `0.9022969937`, best 후보 `0.9034554556`; 보수 후보 `m0.20/drop0.2/topN4`도 `0.9033675968` | 후보 확보 |
+| 24 | K256 retune 1000 | K256 보수 후보 확대 검증 | PDM score 표 + step summary | baseline `0.8852103916`, `m0.20/drop0.2/topN4` UTMR `0.8900427692`, accepted `3.0%` | subset 개선 확인 |
 
 ## 핵심 숫자
 
@@ -42,6 +45,7 @@
 | K64 full | 0.8471632864 | 0.8542971577 | +0.0071338713 | 논문 설정에서 UTMR 개선 |
 | K64 1000 best sensitivity | 0.8638675087 | 0.8720460220 | +0.0081785133 | 현재 guard 설정 근거 |
 | K256 full | 0.8833150351 | 0.8827077445 | -0.0006072906 | K256은 별도 tuning 필요 |
+| K256 retune 1000 | 0.8852103916 | 0.8900427692 | +0.0048323775 | 보수 guard는 K256 subset에서도 개선 |
 
 ## 결과물 양식
 
@@ -58,6 +62,6 @@
 ## 현재 결론
 
 1. 논문 설정인 `K=64`에서는 guarded safety UTMR가 full NAVSIM에서 baseline보다 높습니다.
-2. 같은 guard를 `K=256`에 그대로 적용하면 baseline보다 약간 낮습니다.
+2. 같은 guard를 `K=256`에 그대로 적용하면 baseline보다 약간 낮지만, 별도 보수 guard(`margin=0.20`, `drop=0.2`, `topN=4`)는 1000-scene subset에서 baseline보다 높았습니다.
 3. K64 sensitivity는 현재 best 설정 `margin=0.15`, `drop=0.5`, `topN=8`을 뒷받침합니다.
-4. AWSIM/Autoware live path는 route/control/TF smoke까지 돌았지만, route success가 잡히는 scenario를 맞춘 뒤 5+ episodes per variant로 다시 돌려야 최종 closed-loop benchmark가 됩니다.
+4. AWSIM/Autoware live path는 route/control/TF/Odometry smoke까지 돌았지만, route success가 잡히는 scenario를 맞춘 뒤 5+ episodes per variant로 다시 돌려야 최종 closed-loop benchmark가 됩니다.

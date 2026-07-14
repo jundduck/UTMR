@@ -367,7 +367,45 @@ utmr fine_score_coverage_pct  100.0
 - 따라서 K64 논문 설정에서는 UTMR 효과가 확인됐지만, K256 원본 anchor로
   확장하려면 별도 guard/weight retuning이 필요합니다.
 
-### 4.10 K64 guarded sensitivity 1000
+### 4.10 K256 retuned guard subset
+
+K256 full에서 같은 guard가 살짝 낮았기 때문에, full을 다시 태우기 전에
+작은 subset으로 별도 K256 guard를 탐색했습니다.
+
+300-scene sweep:
+
+| Setting | Score | Delta vs baseline | Rerank accepted |
+| --- | ---: | ---: | ---: |
+| baseline | 0.9022969937 | +0.0000000000 | 0.0% |
+| `margin=0.15, drop=0.5, topN=8` | 0.9034554556 | +0.0011584619 | 5.0% |
+| `margin=0.20, drop=0.2, topN=4` | 0.9033675968 | +0.0010706030 | 1.0% |
+| `margin=0.20, drop=0.2, topN=8` | 0.9013241824 | -0.0009728113 | 1.667% |
+| `margin=0.25, drop=0.1, topN=4` | 0.9021673380 | -0.0001296557 | 0.667% |
+
+1000-scene confirmation:
+
+| Method | Scene | Success | Failed | Score | Rerank accepted |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| K256 baseline | 1000 | 1000 | 0 | 0.8852103916 | 0.0% |
+| K256 retuned UTMR | 1000 | 1000 | 0 | 0.8900427692 | 3.0% |
+
+K256 retuned setting:
+
+```bash
+NUM_TRAJ_ANCHOR=256
+UTMR_TOP_N=4
+UTMR_FINE_MARGIN_MIN=0.20
+UTMR_MAX_COARSE_DROP=0.2
+```
+
+의미:
+
+- K256은 K64보다 baseline이 강해서 더 보수적인 guard가 필요합니다.
+- `margin=0.20`, `drop=0.2`, `topN=4`는 1000-scene subset에서
+  `+0.0048323775` 개선됐고, rerank accepted는 `3.0%`로 낮았습니다.
+- K256 retuned full run은 optional robustness check로 남아 있습니다.
+
+### 4.11 K64 guarded sensitivity 1000
 
 `UTMR_FINE_MARGIN_MIN`, `UTMR_MAX_COARSE_DROP`, `UTMR_TOP_N` 조합을 바꿔
 1000-scene sensitivity를 돌렸습니다.
@@ -390,6 +428,8 @@ utmr fine_score_coverage_pct  100.0
 
 ## 5. 현재 best 설정
 
+K64 논문 본문 설정:
+
 ```bash
 NUM_TRAJ_ANCHOR=64
 MODE=utmr
@@ -407,6 +447,16 @@ UTMR_FINE_TTC_WEIGHT=1.0
 UTMR_FINE_COMFORT_WEIGHT=0.5
 UTMR_FINE_MARGIN_MIN=0.15
 UTMR_MAX_COARSE_DROP=0.5
+```
+
+K256 추가 검증용 보수 설정:
+
+```bash
+NUM_TRAJ_ANCHOR=256
+MODE=utmr
+UTMR_TOP_N=4
+UTMR_FINE_MARGIN_MIN=0.20
+UTMR_MAX_COARSE_DROP=0.2
 ```
 
 해석:
@@ -429,9 +479,12 @@ success가 `0%`이기 때문입니다.
 | `autoware/utmr_scripts/helpers/route_publisher.py` | synthetic route를 `/planning/mission_planning/route`로 publish |
 | `autoware/utmr_scripts/helpers/drive_gear_injector.py` | gear/turn/hazard/control/gate/heartbeat command를 publish |
 | `autoware/utmr_scripts/helpers/static_tf_injector.py` | AWSIM demo frame mismatch 완화를 위해 static/dynamic TF publish |
-| `autoware/utmr_scripts/helpers/collision_monitor.py` | object topic 기반 collision bridge |
-| `autoware/utmr_scripts/helpers/episode_metric_monitor.py` | route, speed, distance, collision metric CSV 작성 |
+| `autoware/utmr_scripts/helpers/collision_monitor.py` | object topic 기반 collision bridge, `Odometry`/`KinematicState` localization input 선택 지원 |
+| `autoware/utmr_scripts/helpers/episode_metric_monitor.py` | route, speed, distance, collision metric CSV 작성, AWSIM `nav_msgs/Odometry` topic 지원 |
 | `autoware/utmr_scripts/helpers/helper_shutdown.py` | 정상 shutdown 중 발생하는 ROS context error만 제한적으로 suppress |
+| `autoware/utmr_scripts/run_utmr_demo.sh` | Autoware service retry/order, localization `success=True` response 확인 |
+| `autoware/utmr_scripts/service_calls.sh` | service response pattern 검증과 재시도 |
+| `experiments/utmr/test_service_calls.sh` | localization 실패 시 autonomous/gate skip 검증 |
 | `experiments/utmr/awsim_supervisor.py` | episode 단위 실행 supervisor |
 | `experiments/utmr/awsim_batch_runner.py` | variant batch 실행 |
 | `experiments/utmr/scenarios/awsim_shinjuku_sample.json` | AWSIM sample scenario |
@@ -449,24 +502,37 @@ success가 `0%`이기 때문입니다.
 - drive injector로 command gate warmup 경고를 줄였습니다.
 - static/dynamic TF injector로 `tamagawa/imu_link`, `velodyne_top` transform
   경고를 크게 줄였습니다.
+- runtime topic probe에서 `/localization/kinematic_state`의 publisher가
+  `nav_msgs/Odometry`임을 확인했고, helper들이 해당 타입을 받을 수 있게
+  adapter를 추가했습니다.
+- `/planning/set_waypoint_route`가 오래 기다리며 operation/gate 호출을 밀어내지
+  않도록 service call 순서를 바꿨습니다.
+- localization service는 shell exit code가 아니라 응답의 `success=True`까지
+  확인합니다.
+- localization이 실패하거나 route가 준비되지 않으면 autonomous mode와 vehicle
+  gate unstop 호출을 건너뜁니다.
+- readiness가 완성되지 않으면 `UTMR_READY=0`와 exit code `2`를 남겨 smoke
+  실패가 조용히 성공처럼 보이지 않게 했습니다.
 
-최신 live smoke:
+최신 live smoke/diagnosis:
 
 ```text
-experiments/utmr/results/awsim_dynamic_tf_smoke_20260714_101654
+experiments/utmr/results/awsim_odometry_adapter_smoke_20260714_105709
+experiments/utmr/results/awsim_service_order_smoke_20260714_110036
+experiments/utmr/results/awsim_localization_strict_smoke_20260714_110423
 ```
 
 | 항목 | 결과 |
 | --- | --- |
 | Variant | `utmr` |
 | Timeout | `75 s` |
-| Planner step rows | `693` |
+| Planner step rows | `802` in Odometry adapter smoke, `1167` in strict localization smoke |
 | Episode metric | observed row |
 | Collision | `False` |
 | Success | `False` |
 | Timeout flag | `True` |
-| Distance | `nan` |
-| Mean speed | `nan` |
+| Distance | `0.0` when localization succeeds; `nan` when init fails |
+| Mean speed | `0.0` when localization succeeds; `nan` when init fails |
 | Driving score | `0.0` |
 
 최신 warning count:
@@ -488,18 +554,25 @@ experiments/utmr/results/awsim_dynamic_tf_smoke_20260714_101654
 해석:
 
 - live smoke는 observed metric row와 planner step log `693` rows를 만들었습니다.
+- Odometry adapter smoke는 metric monitor가 live localization을 받는 것을
+  확인했습니다.
 - helper tracebacks, leftover AWSIM/Autoware/UTMR processes, UTMR symlinks는
   최종 확인 기준 `0`입니다.
 - route-missing/waiting 문제는 해결됐습니다.
 - command gate와 TF 문제는 줄었지만 장기 실행 중 일부 남습니다.
 - 하지만 route success가 아직 `0%`이고 QA 기준으로도 TF/topic/MRM 진단이
   남아 있어서, 논문용 AWSIM 성능 표로는 아직 부족합니다.
+- 현재 남은 큰 blocker는 AWSIM ego vehicle state입니다. 일부 run에서
+  `/localization/initialize`가 `The vehicle is not stopped.`로 실패하면
+  UTMR planner가 fallback pose/speed로만 동작합니다.
 
 남은 작업:
 
 1. route arrival이 잡히는 scenario/initial pose/goal pose를 다시 맞춥니다.
-2. perception/object topic을 켠 상태에서 `probe_live_topics.sh`로 topic을 확정합니다.
-3. 성공이 잡히는 scenario에서 5+ episodes per variant로 다시 실행합니다.
+2. AWSIM ego vehicle을 localization init 전에 확실히 정지/reset시키는 절차를
+   추가합니다.
+3. perception/object topic을 켠 상태에서 `probe_live_topics.sh`로 topic을 확정합니다.
+4. 성공이 잡히는 scenario에서 5+ episodes per variant로 다시 실행합니다.
 
 ## 7. 긴 실행 명령
 
@@ -647,6 +720,8 @@ experiments/utmr/check_assets.sh
 5. guarded reranking은 1000-scene subset에서 baseline보다 높았습니다.
 6. guarded reranking은 full `12146`-scenario 평가에서도 baseline보다 높았습니다.
 7. K64 sensitivity에서도 `margin=0.15`, `drop=0.5`, `topN=8`이 가장 좋았습니다.
-8. K256 원본 anchor에서는 같은 guard가 baseline보다 약간 낮아 별도 retuning이 필요합니다.
-9. AWSIM/Autoware live path는 실행됐지만, route success가 잡히는 scenario를
+8. K256 원본 anchor에서는 같은 guard가 baseline보다 약간 낮았지만, 보수 guard는
+   1000-scene subset에서 baseline보다 높았습니다.
+9. AWSIM/Autoware live path는 실행됐고 Odometry/service-order blocker 일부를
+   해결했지만, route success가 잡히는 scenario와 ego stop/reset 절차를
    추가로 맞춰야 최종 closed-loop 성능 비교가 됩니다.

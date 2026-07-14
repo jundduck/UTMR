@@ -8,7 +8,7 @@
 | 구분 | 뜻 | 논문에서 사용? | 이번 실험에서 왜 했나 | 결론 |
 | --- | --- | --- | --- | --- |
 | K64 | 한 planning step에서 후보 trajectory 64개를 평가 | 예. 현재 논문 구현의 주 설정 | 논문 설정을 맞추기 위해 K256 WoTE 공개 자산에서 K64 anchor/cache를 생성 | guarded UTMR가 full NAVSIM에서 baseline보다 높음 |
-| K256 | 한 planning step에서 후보 trajectory 256개를 평가 | 아니오. WoTE 원본 공개 자산 기준 추가 검증 | 같은 guard가 더 강한 원본 WoTE K256 후보군에도 전이되는지 확인 | baseline이 훨씬 강하고 같은 guard는 약간 낮음. 별도 tuning 필요 |
+| K256 | 한 planning step에서 후보 trajectory 256개를 평가 | 아니오. WoTE 원본 공개 자산 기준 추가 검증 | 같은 guard가 더 강한 원본 WoTE K256 후보군에도 전이되는지 확인 | baseline이 훨씬 강하고 같은 guard는 약간 낮음. 별도 보수 guard는 subset에서 개선 |
 
 즉, 논문 본문 결과로 볼 핵심은 K64입니다. K256은 논문 설정이 아니라
 “원본 WoTE anchor에서도 같은 설정이 통하는가?”를 확인한 sanity/robustness
@@ -39,6 +39,8 @@
 | 19 | AWSIM initial live batch | live pipeline 첫 end-to-end smoke | episode CSV + runtime 표 | 5 variants × 1 episode 실행, route success `0%` | smoke 완료, benchmark 아님 |
 | 20 | AWSIM route/control smoke | Autoware route와 command gate 진단 | 로그 카운트 + CSV | route-missing/waiting은 `0`; command/heartbeat 경고는 감소했지만 일부 남음 | smoke 완료, benchmark 아님 |
 | 21 | AWSIM dynamic TF smoke | sensor/localization TF mismatch 완화 | 로그 카운트 + CSV | `693` planner steps, observed metric row 생성. TF 경고는 크게 감소했지만 route success는 아직 `0%` | smoke evidence 확보, benchmark 아님 |
+| 22 | AWSIM Odometry/service retry smoke | 실제 live localization topic과 service timing 진단 | runtime topic probe + episode CSV | `/localization/kinematic_state` publisher가 `nav_msgs/Odometry`; helper adapter 후 metric 숫자 기록 가능; localization `success=False`는 재시도 | blocker 일부 해결 |
+| 23 | K256 retune 300/1000 | K256 별도 guard가 필요한지 확인 | PDM score 표 | 1000-scene에서 baseline `0.8852103916`, retuned UTMR `0.8900427692` | subset 개선 확인 |
 
 ## 핵심 결과 숫자
 
@@ -47,6 +49,7 @@
 | K64 full NAVSIM | 0.8471632864 | 0.8542971577 | +0.0071338713 | 논문 설정에서 guarded UTMR 개선 확인 |
 | K64 1000 best sensitivity | 0.8638675087 | 0.8720460220 | +0.0081785133 | 현재 guard 설정의 근거 |
 | K256 full NAVSIM | 0.8833150351 | 0.8827077445 | -0.0006072906 | K256에는 별도 tuning 필요 |
+| K256 retune 1000 | 0.8852103916 | 0.8900427692 | +0.0048323775 | 보수 guard는 K256 subset에서도 개선 |
 
 ## 결과물 양식
 
@@ -68,15 +71,14 @@
 
 | 우선순위 | 남은 일 | 왜 필요한가 | 현재 상태 |
 | ---: | --- | --- | --- |
-| 1 | AWSIM route success가 잡히는 scenario 재설정 | closed-loop/live benchmark 완성 | helper는 준비됐지만 route/localization/duplicated ADAPI 진단이 남음 |
+| 1 | AWSIM route success가 잡히는 scenario 재설정 | closed-loop/live benchmark 완성 | helper는 준비됐고 Odometry/service blocker 일부 해결. ego vehicle stop/reset과 route arrival가 남음 |
 | 2 | AWSIM 5+ episodes per variant 반복 | live table의 통계 신뢰도 확보 | 아직 route success가 0%라 반복 전 scenario부터 고쳐야 함 |
-| 3 | K256 전용 guard/weight retuning | 원본 WoTE K256에서도 개선 여부 확인 | 같은 K64 guard로는 baseline보다 약간 낮음 |
+| 3 | K256 retuned full run | 원본 WoTE K256에서도 개선 여부 확인 | 1000-scene retuned guard는 개선 확인. full은 optional robustness check |
 | 4 | 논문용 표/그림 polish | 제출용 결과 정리 | NAVSIM 표/그림 재료는 이미 생성됨 |
 
 따라서 지금 기준 결론은:
 
 - NAVSIM/WoTE 논문 구현은 성공.
 - K64 main result는 성공.
-- K256 robustness check는 완료했지만 개선은 아님.
-- AWSIM live path는 integration smoke evidence까지 확보했고, 최종 closed-loop benchmark는
-  route/localization scenario 정합을 더 맞춰야 함.
+- K256 full에서 같은 guard는 낮았지만, 별도 보수 guard는 1000-scene subset에서 개선.
+- AWSIM live path는 integration smoke evidence까지 확보했고, Odometry topic mismatch, service-order, localization `success=False` retry 문제를 일부 해결. 최종 closed-loop benchmark는 ego stop/reset과 route success scenario를 더 맞춰야 함.

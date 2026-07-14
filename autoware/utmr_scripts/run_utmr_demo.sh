@@ -31,8 +31,12 @@ UTMR_FALLBACK_Z="${UTMR_FALLBACK_Z:-$UTMR_INIT_Z}"
 UTMR_FALLBACK_YAW="${UTMR_FALLBACK_YAW:-0.5895}"
 UTMR_COLLISION_TOPIC="${UTMR_COLLISION_TOPIC:-/utmr/collision}"
 UTMR_COLLISION_OUTPUT_TOPIC="${UTMR_COLLISION_OUTPUT_TOPIC:-/utmr/collision}"
-UTMR_SERVICE_LIST_TIMEOUT_S="${UTMR_SERVICE_LIST_TIMEOUT_S:-8}"
-UTMR_SERVICE_CALL_TIMEOUT_S="${UTMR_SERVICE_CALL_TIMEOUT_S:-15}"
+UTMR_SERVICE_INITIAL_WAIT_S="${UTMR_SERVICE_INITIAL_WAIT_S:-3}"
+UTMR_SERVICE_LIST_TIMEOUT_S="${UTMR_SERVICE_LIST_TIMEOUT_S:-3}"
+UTMR_SERVICE_CALL_TIMEOUT_S="${UTMR_SERVICE_CALL_TIMEOUT_S:-6}"
+UTMR_SERVICE_RETRY_COUNT="${UTMR_SERVICE_RETRY_COUNT:-4}"
+UTMR_SERVICE_RETRY_SLEEP_S="${UTMR_SERVICE_RETRY_SLEEP_S:-2}"
+UTMR_SERVICE_RESPONSE_DIR="${UTMR_SERVICE_RESPONSE_DIR:-${TMPDIR:-/tmp}}"
 UTMR_ROUTE_UUID_BYTES="${UTMR_ROUTE_UUID_BYTES:-[17,17,17,17,34,34,51,51,68,68,85,85,85,85,85,85]}"
 export UTMR_MODE
 export UTMR_STEP_LOG
@@ -59,6 +63,7 @@ export UTMR_GOAL_QZ
 export UTMR_GOAL_QW
 
 source /opt/ros/humble/setup.bash
+source "$SCRIPT_DIR/service_calls.sh"
 source "$SCRIPT_DIR/setup_runtime_overlay.sh"
 cd "$AUTOWARE_DIR"
 source install/setup.bash
@@ -120,35 +125,77 @@ mkdir -p "$(dirname "$UTMR_STEP_LOG")"
 start_helper utmr_planner "$HELPER_DIR/utmr_planner_node.py" "$(helper_log utmr-planner-node.log)"
 
 echo "waiting for Autoware services..."
-sleep 3
+sleep "$UTMR_SERVICE_INITIAL_WAIT_S"
 
-service_exists() {
-  timeout "$UTMR_SERVICE_LIST_TIMEOUT_S" ros2 service list 2>/tmp/utmr-ros2-service-list.err | grep -qx "$1"
-}
+INIT_REQUEST="{method: 1, pose_with_covariance: [{header: {frame_id: map}, pose: {pose: {position: {x: $UTMR_INIT_X, y: $UTMR_INIT_Y, z: $UTMR_INIT_Z}, orientation: {x: $UTMR_INIT_QX, y: $UTMR_INIT_QY, z: $UTMR_INIT_QZ, w: $UTMR_INIT_QW}}, covariance: $UTMR_INIT_COVARIANCE}}]}"
+localization_ready=0
+if utmr_call_service_with_retry \
+  "localization initialize" \
+  /localization/initialize \
+  autoware_localization_msgs/srv/InitializeLocalization \
+  "$INIT_REQUEST" \
+  "$UTMR_SERVICE_RETRY_COUNT" \
+  "$UTMR_SERVICE_RETRY_SLEEP_S" \
+  "success=True"; then
+  localization_ready=1
+fi
 
-if service_exists /localization/initialize; then
-  INIT_REQUEST="{method: 1, pose_with_covariance: [{header: {frame_id: map}, pose: {pose: {position: {x: $UTMR_INIT_X, y: $UTMR_INIT_Y, z: $UTMR_INIT_Z}, orientation: {x: $UTMR_INIT_QX, y: $UTMR_INIT_QY, z: $UTMR_INIT_QZ, w: $UTMR_INIT_QW}}, covariance: $UTMR_INIT_COVARIANCE}}]}"
-  timeout "$UTMR_SERVICE_CALL_TIMEOUT_S" ros2 service call /localization/initialize autoware_localization_msgs/srv/InitializeLocalization "$INIT_REQUEST" || true
+ROUTE_REQUEST="{header: {frame_id: map}, option: {allow_goal_modification: true}, goal: {position: {x: $UTMR_GOAL_X, y: $UTMR_GOAL_Y, z: $UTMR_GOAL_Z}, orientation: {x: $UTMR_GOAL_QX, y: $UTMR_GOAL_QY, z: $UTMR_GOAL_QZ, w: $UTMR_GOAL_QW}}, waypoints: []}"
+route_ready=0
+if utmr_call_service_with_retry \
+  "ADAPI route set" \
+  /api/routing/set_route_points \
+  autoware_adapi_v1_msgs/srv/SetRoutePoints \
+  "$ROUTE_REQUEST" \
+  "$UTMR_SERVICE_RETRY_COUNT" \
+  "$UTMR_SERVICE_RETRY_SLEEP_S" \
+  "success=True|The route is already set"; then
+  route_ready=1
+fi
+
+if [[ "$localization_ready" == "1" && "$route_ready" == "1" ]]; then
+  operation_ready=0
+  if utmr_call_service_with_retry \
+    "operation mode autonomous" \
+    /system/operation_mode/change_operation_mode \
+    autoware_system_msgs/srv/ChangeOperationMode \
+    "{mode: 2}" \
+    2 \
+    1 \
+    "success=True"; then
+    operation_ready=1
+  fi
+
+  gate_ready=0
+  if utmr_call_service_with_retry \
+    "vehicle command gate unstop" \
+    /control/vehicle_cmd_gate/set_stop \
+    tier4_control_msgs/srv/SetStop \
+    "{stop: false, request_source: utmr}" \
+    2 \
+    1 \
+    "success=True"; then
+    gate_ready=1
+  fi
 else
-  echo "skip localization initialize: service is not available yet"
+  operation_ready=0
+  gate_ready=0
+  echo "skip autonomous/gate services: localization_ready=$localization_ready route_ready=$route_ready"
 fi
 
-if service_exists /api/routing/set_route_points; then
-  ROUTE_REQUEST="{header: {frame_id: map}, option: {allow_goal_modification: true}, goal: {position: {x: $UTMR_GOAL_X, y: $UTMR_GOAL_Y, z: $UTMR_GOAL_Z}, orientation: {x: $UTMR_GOAL_QX, y: $UTMR_GOAL_QY, z: $UTMR_GOAL_QZ, w: $UTMR_GOAL_QW}}, waypoints: []}"
-  timeout "$UTMR_SERVICE_CALL_TIMEOUT_S" ros2 service call /api/routing/set_route_points autoware_adapi_v1_msgs/srv/SetRoutePoints "$ROUTE_REQUEST" || true
-fi
+WAYPOINT_ROUTE_REQUEST="{header: {frame_id: map}, goal_pose: {position: {x: $UTMR_GOAL_X, y: $UTMR_GOAL_Y, z: $UTMR_GOAL_Z}, orientation: {x: $UTMR_GOAL_QX, y: $UTMR_GOAL_QY, z: $UTMR_GOAL_QZ, w: $UTMR_GOAL_QW}}, waypoints: [], uuid: {uuid: $UTMR_ROUTE_UUID_BYTES}, allow_modification: true}"
+utmr_call_service_with_retry \
+  "planning waypoint route set" \
+  /planning/set_waypoint_route \
+  autoware_planning_msgs/srv/SetWaypointRoute \
+  "$WAYPOINT_ROUTE_REQUEST" \
+  1 \
+  1 \
+  "success=True|The route is already set" || true
 
-if service_exists /planning/set_waypoint_route; then
-  WAYPOINT_ROUTE_REQUEST="{header: {frame_id: map}, goal_pose: {position: {x: $UTMR_GOAL_X, y: $UTMR_GOAL_Y, z: $UTMR_GOAL_Z}, orientation: {x: $UTMR_GOAL_QX, y: $UTMR_GOAL_QY, z: $UTMR_GOAL_QZ, w: $UTMR_GOAL_QW}}, waypoints: [], uuid: {uuid: $UTMR_ROUTE_UUID_BYTES}, allow_modification: true}"
-  timeout "$UTMR_SERVICE_CALL_TIMEOUT_S" ros2 service call /planning/set_waypoint_route autoware_planning_msgs/srv/SetWaypointRoute "$WAYPOINT_ROUTE_REQUEST" || true
+if [[ "$localization_ready" == "1" && "$route_ready" == "1" && "$operation_ready" == "1" && "$gate_ready" == "1" ]]; then
+  echo "done. UTMR_READY=1 planner mode=$UTMR_MODE, step log=$UTMR_STEP_LOG"
+else
+  echo "degraded. UTMR_READY=0 localization_ready=$localization_ready route_ready=$route_ready operation_ready=$operation_ready gate_ready=$gate_ready planner mode=$UTMR_MODE, step log=$UTMR_STEP_LOG"
+  exit 2
 fi
-
-if service_exists /system/operation_mode/change_operation_mode; then
-  timeout "$UTMR_SERVICE_CALL_TIMEOUT_S" ros2 service call /system/operation_mode/change_operation_mode autoware_system_msgs/srv/ChangeOperationMode "{mode: 2}" || true
-fi
-
-if service_exists /control/vehicle_cmd_gate/set_stop; then
-  timeout "$UTMR_SERVICE_CALL_TIMEOUT_S" ros2 service call /control/vehicle_cmd_gate/set_stop tier4_control_msgs/srv/SetStop "{stop: false, request_source: utmr}" || true
-fi
-
-echo "done. UTMR planner mode=$UTMR_MODE, step log=$UTMR_STEP_LOG"

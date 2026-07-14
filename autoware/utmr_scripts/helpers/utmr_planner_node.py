@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# allow: SIZE_OK - ROS executable helper owns subscriptions, UTMR scoring, and Autoware trajectory publishing.
 import json
 import math
 import os
@@ -16,6 +17,7 @@ from autoware_planning_msgs.msg import Trajectory
 from autoware_planning_msgs.msg import TrajectoryPoint
 from geometry_msgs.msg import Quaternion
 from helper_shutdown import is_expected_shutdown_error
+from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -87,6 +89,8 @@ class UTMRPlannerNode(Node):
         self.obstacle_msg_type = os.environ.get("UTMR_OBJECTS_MSG_TYPE", "PredictedObjects")
         self.obstacle_min_probability = float(os.environ.get("UTMR_OBJECT_MIN_PROBABILITY", "0.1"))
         self.obstacle_max_range_m = float(os.environ.get("UTMR_OBJECT_MAX_RANGE_M", "120.0"))
+        self.kinematic_topic = os.environ.get("UTMR_KINEMATIC_TOPIC", "/localization/kinematic_state")
+        self.kinematic_msg_type = os.environ.get("UTMR_KINEMATIC_MSG_TYPE", "Odometry")
         self.fallback_pose = (
             float(os.environ.get("UTMR_FALLBACK_X", "81377.34")),
             float(os.environ.get("UTMR_FALLBACK_Y", "49916.89")),
@@ -112,13 +116,23 @@ class UTMRPlannerNode(Node):
         self.planner = UTMRPlanner(self.config)
 
         self.publisher = self.create_publisher(Trajectory, "/planning/trajectory", 10)
-        self.create_subscription(KinematicState, "/localization/kinematic_state", self.on_kinematic_state, 10)
+        self.create_kinematic_subscription()
         self.dynamic_obstacles_map: list[Obstacle] = []
         self.dynamic_obstacles_frame_id = "map"
         self.create_object_subscription()
         self.timer = self.create_timer(0.1, self.publish_trajectory)
-        self.last_state = None
+        self.last_pose = None
+        self.last_twist = None
         self.count = 0
+
+    def create_kinematic_subscription(self):
+        if self.kinematic_msg_type == "KinematicState":
+            self.create_subscription(KinematicState, self.kinematic_topic, self.on_kinematic_state, 10)
+        else:
+            if self.kinematic_msg_type != "Odometry":
+                self.get_logger().warning(f"unknown UTMR_KINEMATIC_MSG_TYPE={self.kinematic_msg_type}; using Odometry")
+            self.create_subscription(Odometry, self.kinematic_topic, self.on_odometry, 10)
+        self.get_logger().info(f"subscribed kinematic topic {self.kinematic_topic} as {self.kinematic_msg_type}")
 
     def create_object_subscription(self):
         msg_types = {
@@ -135,7 +149,12 @@ class UTMRPlannerNode(Node):
         self.get_logger().info(f"subscribed obstacle topic {self.obstacle_topic} as {self.obstacle_msg_type}")
 
     def on_kinematic_state(self, msg: KinematicState):
-        self.last_state = msg
+        self.last_pose = msg.pose_with_covariance.pose
+        self.last_twist = msg.twist_with_covariance.twist
+
+    def on_odometry(self, msg: Odometry):
+        self.last_pose = msg.pose.pose
+        self.last_twist = msg.twist.twist
 
     def on_objects(self, msg):
         obstacles = []
@@ -154,12 +173,12 @@ class UTMRPlannerNode(Node):
         self.static_obstacles = parse_obstacles(msg.data)
 
     def current_state(self):
-        if self.last_state is None:
+        if self.last_pose is None or self.last_twist is None:
             x, y, z, yaw = self.fallback_pose
             return x, y, z, yaw, self.fallback_speed_mps
 
-        pose = self.last_state.pose_with_covariance.pose
-        twist = self.last_state.twist_with_covariance.twist
+        pose = self.last_pose
+        twist = self.last_twist
         speed = math.hypot(twist.linear.x, twist.linear.y)
         return (
             pose.position.x,

@@ -36,6 +36,8 @@ The repository contains the source needed to reproduce the current experiments:
 | `third_party/WoTE/navsim/agents/WoTE/WoTE_agent.py` | NAVSIM step logging for UTMR diagnostics. |
 | `third_party/WoTE/navsim/agents/WoTE/configs/default.py` | UTMR config defaults. |
 | `autoware/utmr_scripts/` | AWSIM/Autoware helper scripts and ROS nodes. |
+| `autoware/utmr_scripts/service_calls.sh` | Shell helper for Autoware service retry and response-pattern validation. |
+| `experiments/utmr/test_service_calls.sh` | Fake-ROS shell test for service gating behavior. |
 
 Large folders are intentionally not tracked: NAVSIM logs, sensor blobs, metric
 cache, checkpoints, Autoware builds, AWSIM binaries, raw result logs, and local
@@ -190,7 +192,51 @@ K256 guarded latency_p99_ms            680.0303
 K256 guarded rerank_accepted_pct       8.1014
 ```
 
-### 8. K64 Guard Sensitivity 1000-Scene Run
+### 8. K256 Retuned Guard Subset Runs
+
+Status: subset retuning complete; full retuned run still pending.
+
+Because the K64 guard did not transfer cleanly to K256, a smaller K256 sweep
+was run before spending another full `12146`-scenario pass.
+
+300-scene candidate sweep:
+
+| Method | PDM score | Delta vs baseline | Accepted |
+| --- | ---: | ---: | ---: |
+| K256 baseline | 0.9022969937 | +0.0000000000 | 0.0% |
+| `margin=0.15`, `drop=0.5`, `topN=8` | 0.9034554556 | +0.0011584619 | 5.0% |
+| `margin=0.20`, `drop=0.2`, `topN=4` | 0.9033675968 | +0.0010706030 | 1.0% |
+| `margin=0.20`, `drop=0.2`, `topN=8` | 0.9013241824 | -0.0009728113 | 1.667% |
+| `margin=0.25`, `drop=0.1`, `topN=4` | 0.9021673380 | -0.0001296557 | 0.667% |
+| `margin=0.25`, `drop=0.2`, `topN=8` | 0.9022969937 | +0.0000000000 | 0.333% |
+| `margin=0.30`, `drop=0.1`, `topN=8` | 0.9022969937 | +0.0000000000 | 0.0% |
+
+1000-scene confirmation for the conservative candidate:
+
+| Method | Success | Failed | PDM score | Accepted | Latency mean |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| K256 baseline | 1000 | 0 | 0.8852103916 | 0.0% | 645.776 ms |
+| K256 retuned UTMR | 1000 | 0 | 0.8900427692 | 3.0% | 645.950 ms |
+
+Retuned K256 setting:
+
+```bash
+NUM_TRAJ_ANCHOR=256
+UTMR_TOP_N=4
+UTMR_FINE_MARGIN_MIN=0.20
+UTMR_MAX_COARSE_DROP=0.2
+```
+
+Finding:
+
+- K256 does need a separate guard; directly reusing K64's setting was not
+  reliable on full test.
+- A more conservative K256 guard improved the 1000-scene subset by
+  `+0.0048323775` while only accepting `3.0%` of reranks.
+- A full retuned K256 run is the next optional robustness check, not required
+  for the paper's K64 main result.
+
+### 9. K64 Guard Sensitivity 1000-Scene Run
 
 Status: complete.
 
@@ -225,7 +271,10 @@ Status: live integration smoke executed; route-success scenario still pending.
 Implemented pieces:
 
 - `/planning/trajectory` UTMR planner publisher.
-- Autoware localization subscription adapter.
+- Autoware localization subscription adapter. Helpers can subscribe to either
+  `nav_msgs/Odometry` or `autoware_localization_msgs/KinematicState` through
+  `UTMR_KINEMATIC_MSG_TYPE`; current AWSIM publishes `Odometry` on
+  `/localization/kinematic_state`.
 - AWSIM object topic adapter for predicted/tracked/detected objects.
 - Collision monitor bridge.
 - Episode metric monitor.
@@ -246,32 +295,44 @@ Implemented pieces:
   process killing was removed.
 - Episode reducer ignores supervisor fallback rows for closed-loop tables so
   missing observed metrics do not look like real driving results.
+- `run_utmr_demo.sh` retries Autoware service calls. Localization initialization
+  is treated as complete only when the service response contains
+  `success=True`; `success=False` responses such as `The vehicle is not stopped.`
+  are retried.
+- Autonomous operation and vehicle-gate unstop are skipped unless localization
+  is ready and the route service either succeeds or reports that the route is
+  already set.
+- If readiness is incomplete, `run_utmr_demo.sh` prints `UTMR_READY=0` and exits
+  with code `2` instead of printing a successful `done` line.
+- Operation mode and vehicle gate service calls now run before the optional
+  `/planning/set_waypoint_route` fallback, so a slow/stale waypoint service no
+  longer blocks command-gate setup.
 
-Latest AWSIM smoke:
+Latest AWSIM diagnosis runs:
 
 ```text
-experiments/utmr/results/awsim_dynamic_tf_smoke_20260714_101654
+experiments/utmr/results/awsim_odometry_adapter_smoke_20260714_105709
+experiments/utmr/results/awsim_service_order_smoke_20260714_110036
+experiments/utmr/results/awsim_localization_strict_smoke_20260714_110423
 ```
 
 Run configuration:
 
 ```text
 variant: utmr
-episodes: 1
-timeout: 75 s
-startup delay: 10 s
+episodes per run: 1
 scenario: experiments/utmr/scenarios/awsim_shinjuku_sample.json
-planner step rows: 693
-episode rows: 1 observed row
-symlinks under UTMR: 0
-leftover AWSIM/Autoware/UTMR processes: 0
+topic probe finding: /localization/kinematic_state publisher type is nav_msgs/Odometry
+service-order finding: operation mode and vehicle gate services are reached
+strict-localization finding: failed localization responses are now retried
 ```
 
 Closed-loop episode result:
 
 | Method | Collision | Success | Timeout | Distance | Mean speed | Driving score | Metric source |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| WoTE + UTMR (Ours) | False | False | True | `nan` | `nan` | 0.0 | observed |
+| WoTE + UTMR (Ours), Odometry adapter smoke | False | False | True | 0.0 | 0.0 | 0.0 | observed |
+| WoTE + UTMR (Ours), strict localization smoke | False | False | True | `nan` | `nan` | 0.0 | observed |
 
 Latest warning counts:
 
@@ -293,17 +354,25 @@ Interpretation:
 
 - The AWSIM + Autoware + UTMR planner + reducer path runs end-to-end and now
   produces an observed metric row, not just a supervisor fallback row.
+- Runtime probing showed the previous helper subscription type was wrong for
+  this Autoware/AWSIM build. After switching the default helper input to
+  `Odometry`, the metric monitor and planner can receive live localization.
 - Route-missing and route-waiting messages were removed by the route publisher.
 - Command gate and TF errors were reduced by the drive injector and dynamic TF
   injector, but are not fully gone in longer runs.
+- The service-order change makes operation mode and vehicle gate setup reachable
+  before the optional waypoint-route service can consume the whole smoke window.
 - The current Shinjuku sample scenario is still not a useful performance
-  benchmark because route success remains `0%`.
+  benchmark because route success remains `0%`, and localization initialization
+  can still fail with `The vehicle is not stopped.` depending on AWSIM state.
 - Treat AWSIM results as live integration smoke. The NAVSIM full results remain
   the meaningful performance evidence.
 
 Still required for stronger live AWSIM:
 
 - Improve route initialization or scenario poses so route arrival is detected.
+- Reset or hold the AWSIM ego vehicle stopped before `/localization/initialize`
+  so initialization reliably returns `success=True`.
 - Confirm real object/collision topics with `probe_live_topics.sh` when
   perception/object topics are enabled.
 - Repeat live batch with at least 5 episodes per variant once success is

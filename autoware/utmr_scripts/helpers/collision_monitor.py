@@ -10,6 +10,7 @@ from autoware_perception_msgs.msg import DetectedObjects
 from autoware_perception_msgs.msg import PredictedObjects
 from autoware_perception_msgs.msg import TrackedObjects
 from helper_shutdown import is_expected_shutdown_error
+from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -61,6 +62,8 @@ class CollisionMonitor(Node):
         self.object_topic = os.environ.get("UTMR_OBJECTS_TOPIC", "/perception/object_recognition/objects")
         self.object_msg_type = os.environ.get("UTMR_OBJECTS_MSG_TYPE", "PredictedObjects")
         self.output_topic = os.environ.get("UTMR_COLLISION_OUTPUT_TOPIC", "/utmr/collision")
+        self.kinematic_topic = os.environ.get("UTMR_KINEMATIC_TOPIC", "/localization/kinematic_state")
+        self.kinematic_msg_type = os.environ.get("UTMR_KINEMATIC_MSG_TYPE", "Odometry")
         self.static_obstacles = parse_obstacles(os.environ.get("UTMR_OBSTACLES_JSON", ""))
         self.static_obstacle_frame = os.environ.get("UTMR_STATIC_OBSTACLE_FRAME", "ego")
         self.ego_radius_m = float(os.environ.get("UTMR_COLLISION_EGO_RADIUS_M", "1.4"))
@@ -73,10 +76,19 @@ class CollisionMonitor(Node):
         self.collision = False
 
         self.publisher = self.create_publisher(Bool, self.output_topic, 10)
-        self.create_subscription(KinematicState, "/localization/kinematic_state", self.on_kinematic_state, 10)
+        self.create_kinematic_subscription()
         self.create_object_subscription()
         self.create_timer(0.1, self.publish_state)
         self.get_logger().info(f"collision monitor publishing {self.output_topic}")
+
+    def create_kinematic_subscription(self):
+        if self.kinematic_msg_type == "KinematicState":
+            self.create_subscription(KinematicState, self.kinematic_topic, self.on_kinematic_state, 10)
+        else:
+            if self.kinematic_msg_type != "Odometry":
+                self.get_logger().warning(f"unknown UTMR_KINEMATIC_MSG_TYPE={self.kinematic_msg_type}; using Odometry")
+            self.create_subscription(Odometry, self.kinematic_topic, self.on_odometry, 10)
+        self.get_logger().info(f"subscribed kinematic topic {self.kinematic_topic} as {self.kinematic_msg_type}")
 
     def create_object_subscription(self):
         msg_types = {
@@ -93,6 +105,13 @@ class CollisionMonitor(Node):
 
     def on_kinematic_state(self, msg: KinematicState):
         pose = msg.pose_with_covariance.pose
+        self.record_pose(pose)
+
+    def on_odometry(self, msg: Odometry):
+        pose = msg.pose.pose
+        self.record_pose(pose)
+
+    def record_pose(self, pose):
         self.last_pose = (
             pose.position.x,
             pose.position.y,
