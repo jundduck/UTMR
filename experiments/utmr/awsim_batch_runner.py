@@ -20,6 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--variants", nargs="+", default=VARIANTS)
     parser.add_argument("--episodes", type=int, default=1)
     parser.add_argument("--timeout-s", type=float, default=120.0)
+    parser.add_argument("--readiness-timeout-s", type=float, default=180.0)
     parser.add_argument("--startup-delay-s", type=float, default=8.0)
     parser.add_argument("--scenario-file", type=Path)
     parser.add_argument("--dry-run", action="store_true")
@@ -71,6 +72,8 @@ def run_supervisor(root: Path, out_dir: Path, variant: str, episode_idx: int, ar
         episode_id,
         "--timeout-s",
         str(args.timeout_s),
+        "--readiness-timeout-s",
+        str(args.readiness_timeout_s),
         "--startup-delay-s",
         str(args.startup_delay_s),
         "--k",

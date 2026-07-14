@@ -312,6 +312,9 @@ Implemented pieces:
   missing observed metrics do not look like real driving results.
 - If readiness is incomplete, `run_utmr_demo.sh` prints `UTMR_READY=0` and exits
   with code `2` instead of printing a successful `done` line.
+- AWSIM supervisor now waits for `run_utmr_demo.sh` readiness to finish before
+  starting the fixed driving timeout. Readiness timeout is controlled by
+  `--readiness-timeout-s`.
 
 Latest AWSIM runs:
 
@@ -319,29 +322,31 @@ Latest AWSIM runs:
 experiments/utmr/results/awsim_route_clear_fastpath_20260714_134344
 experiments/utmr/results/awsim_live_batch_fastpath_20260714_134703
 experiments/utmr/results/awsim_post_retry_wait_smoke_20260714_140249
+experiments/utmr/results/awsim_live_batch_5ep_readywait_20260714_142811
 ```
 
-Main live batch configuration:
+Main repeated live batch configuration:
 
 ```text
 variants: baseline, utmr, uniform_fine, fine_dt_only, short_horizon_only
-episodes per variant: 1
+episodes per variant: 5
 scenario: experiments/utmr/scenarios/awsim_shinjuku_sample.json
 timeout: 120 s
-merged steps: 4631
-observed episode rows: 5
+readiness timeout: 240 s
+merged steps: 32056
+observed episode rows: 25
 fallback episode rows: 0
 ```
 
 Closed-loop episode result:
 
-| Method | Variant | Collision | Success | Timeout | Distance m | Mean speed km/h | Driving score |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| WoTE | baseline | False | True | False | 150.852 | 5.963 | 76.242 |
-| WoTE + UTMR (Ours) | utmr | False | True | False | 148.635 | 6.096 | 76.270 |
-| WoTE + Uniform Fine | uniform_fine | False | True | False | 146.422 | 5.478 | 76.141 |
-| UTMR (fine dt only) | fine_dt_only | False | True | False | 195.204 | 8.919 | 76.858 |
-| UTMR (short horizon only) | short_horizon_only | False | True | False | 146.356 | 5.784 | 76.205 |
+| Method | Episodes | Collision source | Success | Fallback | Mean speed km/h | Driving score |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| WoTE | 5 | not measured | 100% | 0 | 4.758 +/- 0.802 | 75.99 +/- 0.167 |
+| WoTE + UTMR (Ours) | 5 | not measured | 100% | 0 | 4.142 +/- 0.050 | 75.86 +/- 0.010 |
+| WoTE + Uniform Fine | 5 | not measured | 100% | 0 | 4.839 +/- 0.901 | 76.01 +/- 0.188 |
+| UTMR (fine dt only) | 5 | not measured | 100% | 0 | 4.958 +/- 1.079 | 76.03 +/- 0.225 |
+| UTMR (short horizon only) | 5 | not measured | 100% | 0 | 4.194 +/- 0.094 | 75.87 +/- 0.020 |
 
 Generated live outputs:
 
@@ -359,18 +364,26 @@ figures/fig5_score_landscape.png
 Interpretation:
 
 - The AWSIM + Autoware + UTMR planner + reducer path now runs end-to-end and
-  produces observed success rows for all five variants.
+  produces observed success rows for all five variants across repeated episodes.
 - The previous `The vehicle is not stopped` blocker is mitigated by using the
   same stop-check topic/threshold/duration as Autoware's pose initializer and
   by retrying localization only after a fresh stopped check.
 - Route setup no longer depends on the synthetic route publisher or the slow
   planning waypoint service.
-- This is still a live smoke result, not a statistically strong benchmark:
-  each variant has only one episode on one sample route.
+- A diagnostic 5-episode attempt before the readiness wait fix produced one
+  fallback row when readiness consumed the fixed timeout. The latest run has
+  no fallback rows because episode timing starts after readiness exits.
+- Collision is not treated as a measured result in this batch: no verified
+  simulator collision/object topic was connected, and the sample scenario did
+  not inject static obstacles. The episode CSV still contains `collision=False`
+  defaults, but the docs intentionally mark collision as not measured.
+- On this single Shinjuku route, full UTMR is slightly below baseline while
+  `fine_dt_only` and `uniform_fine` are slightly above baseline. This should be
+  interpreted as live integration stability evidence, not a general closed-loop
+  performance conclusion.
 
 Still required for stronger live AWSIM:
 
-- Repeat live batch with at least 5 episodes per variant.
 - Add more AWSIM scenarios/routes before treating the live table as robust.
 - Confirm real object/collision topics with `probe_live_topics.sh` when
   perception/object topics are enabled.

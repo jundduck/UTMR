@@ -521,20 +521,22 @@ AWSIM + Autoware + UTMR planner + reducer가 observed closed-loop row를
   gate unstop 호출을 건너뜁니다.
 - readiness가 완성되지 않으면 `UTMR_READY=0`와 exit code `2`를 남겨 smoke
   실패가 조용히 성공처럼 보이지 않게 했습니다.
+- supervisor는 `run_utmr_demo.sh` readiness가 종료된 뒤에만 driving timeout을
+  시작합니다. 이 대기는 `--readiness-timeout-s`로 조절합니다.
 
 최신 live batch:
 
 ```text
-experiments/utmr/results/awsim_live_batch_fastpath_20260714_134703
+experiments/utmr/results/awsim_live_batch_5ep_readywait_20260714_142811
 ```
 
-| Method | Variant | Collision | Success | Timeout | Distance m | Mean speed km/h | Driving score |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| WoTE | baseline | False | True | False | 150.852 | 5.963 | 76.242 |
-| WoTE + UTMR (Ours) | utmr | False | True | False | 148.635 | 6.096 | 76.270 |
-| WoTE + Uniform Fine | uniform_fine | False | True | False | 146.422 | 5.478 | 76.141 |
-| UTMR (fine dt only) | fine_dt_only | False | True | False | 195.204 | 8.919 | 76.858 |
-| UTMR (short horizon only) | short_horizon_only | False | True | False | 146.356 | 5.784 | 76.205 |
+| Method | Episodes | Collision source | Success | Fallback | Mean speed km/h | Driving score |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| WoTE | 5 | not measured | 100% | 0 | 4.758 +/- 0.802 | 75.99 +/- 0.167 |
+| WoTE + UTMR (Ours) | 5 | not measured | 100% | 0 | 4.142 +/- 0.050 | 75.86 +/- 0.010 |
+| WoTE + Uniform Fine | 5 | not measured | 100% | 0 | 4.839 +/- 0.901 | 76.01 +/- 0.188 |
+| UTMR (fine dt only) | 5 | not measured | 100% | 0 | 4.958 +/- 1.079 | 76.03 +/- 0.225 |
+| UTMR (short horizon only) | 5 | not measured | 100% | 0 | 4.194 +/- 0.094 | 75.87 +/- 0.020 |
 
 Generated outputs:
 
@@ -551,20 +553,29 @@ figures/fig5_score_landscape.png
 
 해석:
 
-- live batch는 5 variants x 1 episode 모두 observed metric row를 만들었습니다.
-- merged planner step log는 `4631` rows입니다.
+- live batch는 5 variants x 5 episodes 모두 observed metric row를 만들었습니다.
+- fallback episode row는 `0`입니다.
+- merged planner step log는 `32056` rows입니다.
 - Odometry adapter는 metric monitor가 live localization을 받는 것을 확인했습니다.
 - helper tracebacks, leftover AWSIM/Autoware/UTMR processes, UTMR symlinks는
   최종 확인 기준 `0`입니다.
 - stopped-condition, route fastpath, command gate 순서 문제는 smoke 기준 해결됐습니다.
-- 하지만 live result는 아직 `episodes=1`이므로 논문용 AWSIM 성능 표로 쓰려면
-  반복 episode와 scenario 다양화가 필요합니다.
+- readiness가 episode driving timeout을 갉아먹는 문제가 supervisor wait로
+  해결됐습니다. 이전 진단 batch에서는 readiness/route setup 지연 때문에
+  fallback row가 섞였지만, 최신 repeated batch에서는 fallback이 없습니다.
+- 이 batch에는 검증된 simulator collision/object topic이 연결되지 않았고,
+  sample scenario도 static obstacle을 주입하지 않았습니다. 따라서 episode
+  CSV의 `collision=False` 기본값은 collision 성능 metric으로 사용하지 않고,
+  표에서는 `not measured`로 기록합니다.
+- Shinjuku sample route 1개 기준으로는 full UTMR가 baseline보다 약간 낮고,
+  `fine_dt_only`와 `uniform_fine`이 근소하게 높았습니다. 따라서 이 live 결과는
+  통합 안정화 증거이며, 일반 성능 결론은 추가 scenario가 필요합니다.
 
 남은 작업:
 
-1. AWSIM live batch를 5+ episodes per variant로 반복합니다.
-2. 추가 AWSIM scenario/route를 만들어 결과가 한 route에만 묶이지 않게 합니다.
-3. perception/object topic을 켠 상태에서 `probe_live_topics.sh`로 topic을 확정합니다.
+1. 추가 AWSIM scenario/route를 만들어 결과가 한 route에만 묶이지 않게 합니다.
+2. perception/object topic을 켠 상태에서 `probe_live_topics.sh`로 topic을 확정합니다.
+3. K256 retuned guard를 full `12146`으로 확대할지 결정합니다.
 
 ## 7. 긴 실행 명령
 
@@ -714,7 +725,7 @@ experiments/utmr/check_assets.sh
 7. K64 sensitivity에서도 `margin=0.15`, `drop=0.5`, `topN=8`이 가장 좋았습니다.
 8. K256 원본 anchor에서는 같은 guard가 baseline보다 약간 낮았지만, 보수 guard는
    1000-scene subset에서 baseline보다 높았습니다.
-9. AWSIM/Autoware live path는 stopped-condition, route fastpath, service-order
-   blocker를 지나 5개 variant 모두 observed success row를 만들었습니다.
-   다만 `episodes=1` smoke이므로 최종 closed-loop 성능 비교에는 반복 실행이
-   더 필요합니다.
+9. AWSIM/Autoware live path는 stopped-condition, route fastpath, service-order,
+   readiness wait를 지나 5개 variant x 5 episodes 모두 observed success row를
+   만들었습니다. fallback row는 `0`입니다.
+10. 남은 것은 AWSIM scenario 다양화와 optional K256 retuned full run입니다.

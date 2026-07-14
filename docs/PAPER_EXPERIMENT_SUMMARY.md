@@ -42,7 +42,8 @@
 | 22 | AWSIM Odometry/service retry smoke | 실제 live localization topic과 service timing 진단 | runtime topic probe + episode CSV | `/localization/kinematic_state` publisher가 `nav_msgs/Odometry`; helper adapter 후 metric 숫자 기록 가능; localization `success=False`는 재시도 | blocker 일부 해결 |
 | 23 | K256 retune 300/1000 | K256 별도 guard가 필요한지 확인 | PDM score 표 | 1000-scene에서 baseline `0.8852103916`, retuned UTMR `0.8900427692` | subset 개선 확인 |
 | 24 | AWSIM stopped-condition/route fastpath | live localization과 route setup 안정화 | 코드 + smoke CSV | stop-check topic/threshold를 Autoware와 맞추고 synthetic route publisher를 기본 off | 구현/검증 완료 |
-| 25 | AWSIM live batch fastpath | 현재 live closed-loop 비교 | episode CSV + Markdown tables + PNG figures | 5 variants × 1 episode, all success, collision `0%`, merged steps `4631` | closed-loop smoke 성공 |
+| 25 | AWSIM live batch fastpath | 현재 live closed-loop 비교 | episode CSV + Markdown tables + PNG figures | 5 variants x 1 episode, all success, collision source not measured, merged steps `4631` | closed-loop smoke 성공 |
+| 26 | AWSIM repeated live batch with readiness wait | live closed-loop 반복성과 fallback 제거 확인 | episode CSV + Markdown tables + PNG figures | 5 variants x 5 episodes, all success, collision source not measured, fallback `0`, merged steps `32056` | 반복 실행 성공 |
 
 ## 핵심 결과 숫자
 
@@ -53,6 +54,7 @@
 | K256 full NAVSIM | 0.8833150351 | 0.8827077445 | -0.0006072906 | K256에는 별도 tuning 필요 |
 | K256 retune 1000 | 0.8852103916 | 0.8900427692 | +0.0048323775 | 보수 guard는 K256 subset에서도 개선 |
 | AWSIM live batch fastpath | 76.242342 | 76.269913 | +0.027571 | 1-episode smoke에서 UTMR가 baseline보다 근소하게 높음 |
+| AWSIM repeated live batch | 75.991225 | 75.862994 | -0.128231 | 5-episode Shinjuku 반복에서는 full UTMR가 약간 낮고, `fine_dt_only`/`uniform_fine`이 근소하게 높음 |
 
 ## 결과물 양식
 
@@ -64,7 +66,7 @@
 | speed-uncertainty | PNG + CSV | figure 후보 |
 | selection bias | PNG + CSV | figure 후보 |
 | score landscape | PNG + CSV | qualitative figure 후보 |
-| AWSIM episode metrics | CSV/표 | live integration 상태. 현재는 `episodes=1`이라 최종 benchmark가 아니라 smoke result |
+| AWSIM episode metrics | CSV/표 | live integration 상태. 현재는 Shinjuku sample 1개 route의 `episodes=5` 반복 결과 |
 
 ## 지금 더 할 실험이 있나?
 
@@ -74,14 +76,13 @@
 
 | 우선순위 | 남은 일 | 왜 필요한가 | 현재 상태 |
 | ---: | --- | --- | --- |
-| 1 | AWSIM 5+ episodes per variant 반복 | live table의 통계 신뢰도 확보 | 1-episode fastpath batch는 성공. 이제 반복 수를 늘리면 됨 |
-| 2 | AWSIM scenario 다양화 | closed-loop/live benchmark 일반화 | 현재는 Shinjuku sample 1개 route 기준 |
-| 3 | K256 retuned full run | 원본 WoTE K256에서도 개선 여부 확인 | 1000-scene retuned guard는 개선 확인. full은 optional robustness check |
-| 4 | 논문용 표/그림 polish | 제출용 결과 정리 | NAVSIM 표/그림 재료는 이미 생성됨 |
+| 1 | AWSIM scenario 다양화 | closed-loop/live benchmark 일반화 | 현재는 Shinjuku sample 1개 route x 5 episodes 기준 |
+| 2 | K256 retuned full run | 원본 WoTE K256에서도 개선 여부 확인 | 1000-scene retuned guard는 개선 확인. full은 optional robustness check |
+| 3 | 논문용 표/그림 polish | 제출용 결과 정리 | NAVSIM/AWSIM 표/그림 재료는 생성됨 |
 
 따라서 지금 기준 결론은:
 
 - NAVSIM/WoTE 논문 구현은 성공.
 - K64 main result는 성공.
 - K256 full에서 같은 guard는 낮았지만, 별도 보수 guard는 1000-scene subset에서 개선.
-- AWSIM live path는 stopped-condition, service-order, route fastpath를 지나 5개 variant 모두 observed success row를 만들었음. 최종 closed-loop benchmark는 반복 episode와 scenario 다양화가 남음.
+- AWSIM live path는 stopped-condition, service-order, route fastpath, readiness wait를 지나 5개 variant x 5 episodes 모두 observed success row를 만들었음. 최종 closed-loop benchmark는 scenario 다양화가 남음.

@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--variant", choices=sorted(METHOD_NAMES), default="utmr")
     parser.add_argument("--episode-id", default="")
     parser.add_argument("--timeout-s", type=float, default=120.0)
+    parser.add_argument("--readiness-timeout-s", type=float, default=180.0)
     parser.add_argument("--skip-awsim", action="store_true")
     parser.add_argument("--skip-autoware", action="store_true")
     parser.add_argument("--skip-monitor", action="store_true")
@@ -199,6 +200,18 @@ def start_process(name: str, command: List[str], cwd: Path, env: Dict[str, str],
     )
 
 
+def wait_for_readiness(process, timeout_s: float) -> None:
+    if process is None:
+        return
+    deadline = time.monotonic() + timeout_s
+    while process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.5)
+    if process.poll() is None:
+        raise TimeoutError(f"UTMR readiness did not finish within {timeout_s:.1f}s")
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(process.returncode, "run_utmr_demo.sh")
+
+
 def terminate_processes(processes) -> None:
     for process in reversed([p for p in processes if p is not None]):
         try:
@@ -348,18 +361,18 @@ def main() -> None:
             if not args.dry_run:
                 time.sleep(args.startup_delay_s)
 
-        processes.append(
-            start_process(
-                "utmr_demo",
-                [str(root / "autoware/utmr_scripts/run_utmr_demo.sh")],
-                root,
-                env,
-                log_dir / f"{episode_id}_utmr_demo.log",
-                args.dry_run,
-            )
+        demo_process = start_process(
+            "utmr_demo",
+            [str(root / "autoware/utmr_scripts/run_utmr_demo.sh")],
+            root,
+            env,
+            log_dir / f"{episode_id}_utmr_demo.log",
+            args.dry_run,
         )
+        processes.append(demo_process)
 
         if not args.dry_run:
+            wait_for_readiness(demo_process, args.readiness_timeout_s)
             time.sleep(args.timeout_s)
     finally:
         if not args.dry_run:

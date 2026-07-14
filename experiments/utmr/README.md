@@ -71,7 +71,8 @@ experiments/utmr/run_awsim_supervisor.sh \
   --out-dir experiments/utmr/results/awsim_session \
   --scenario-file experiments/utmr/scenarios/awsim_shinjuku_sample.json \
   --variant utmr \
-  --timeout-s 120
+  --timeout-s 120 \
+  --readiness-timeout-s 240
 
 autoware/utmr_scripts/probe_live_topics.sh  # prints suggested UTMR_OBJECTS_* / UTMR_COLLISION_TOPIC exports
 
@@ -80,7 +81,8 @@ experiments/utmr/run_awsim_batch.sh \
   --scenario-file experiments/utmr/scenarios/awsim_shinjuku_sample.json \
   --variants baseline utmr uniform_fine fine_dt_only short_horizon_only \
   --episodes 5 \
-  --timeout-s 120
+  --timeout-s 120 \
+  --readiness-timeout-s 240
 ```
 
 Current AWSIM defaults:
@@ -90,12 +92,27 @@ Current AWSIM defaults:
   localization initialize attempt.
 - AWSIM supervisor disables the automatic pose initializer by default so the
   scripted DIRECT initialize call can own startup.
+- AWSIM supervisor waits for `run_utmr_demo.sh` readiness to finish before
+  starting the driving timeout. Use `--readiness-timeout-s` when route or
+  localization startup is slow.
 - `UTMR_START_ROUTE_PUBLISHER=0` by default for AWSIM live runs. Enable it only
   when you intentionally want the synthetic route publisher.
 - `UTMR_SET_PLANNING_WAYPOINT_ROUTE=0` and
   `UTMR_CLEAR_PLANNING_ROUTE_BEFORE_SET=0` by default, because the ADAPI route
   service is enough for the current smoke and the planning services can consume
   the full ROS CLI timeout in this build.
+
+Latest repeated AWSIM batch evidence:
+
+```text
+experiments/utmr/results/awsim_live_batch_5ep_readywait_20260714_142811
+variants: baseline, utmr, uniform_fine, fine_dt_only, short_horizon_only
+episodes per variant: 5
+observed rows: 25
+fallback rows: 0
+success: 100%
+collision source: not verified in this run
+```
 
 `setup_wote_runtime.sh` installs the UTMR-local Python packages needed to import WoTE/NAVSIM without creating a virtualenv or symlinks. `source_wote_runtime.sh` exports `PYTHONPATH`, `NAVSIM_DEVKIT_ROOT`, `OPENSCENE_DATA_ROOT`, and the matching map/exp roots for the current shell.
 

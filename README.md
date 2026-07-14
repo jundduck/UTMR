@@ -29,7 +29,7 @@ UTMR가 baseline보다 높은 결과를 냈습니다.
 | K256 retuned guard | 1000 | 1000 / 0 | 0.8900427692 | 보수 guard subset 개선 |
 | WoTE baseline | 1000 | 1000 / 0 | 0.8638675087 | subset 기준선 |
 | UTMR guarded safety | 1000 | 1000 / 0 | 0.8720460220 | tuning용 subset 결과 |
-| AWSIM live batch fastpath | 5 variants x 1 episode | 5 / 0 observed rows | success 100%, collision 0% | live closed-loop smoke 성공 |
+| AWSIM live repeated batch | 5 variants x 5 episodes | 25 / 0 fallback rows | success 100%, collision source unverified | live closed-loop 반복 실행 성공 |
 
 `UTMR guarded safety`는 baseline 후보를 무조건 바꾸지 않고, fine metric
 score가 충분히 좋아지고 coarse score 손실이 제한될 때만 rerank를 받아들이는
@@ -90,23 +90,23 @@ closed-loop episode CSV를 생성합니다.
 | `autoware/utmr_scripts/service_calls.sh` | Autoware service 응답 패턴 검증과 재시도 helper입니다. |
 | `autoware/utmr_scripts/service_readiness.sh` | localization, route, autonomous mode, vehicle gate 순서를 fail-closed로 실행합니다. operation 실패 시 `{stop:false}` gate call을 보내지 않습니다. |
 | `experiments/utmr/test_service_calls.sh` | production readiness 함수를 fake-ROS로 실행해 localization 실패와 operation 실패 모두에서 gate를 호출하지 않는지 검증합니다. |
-| `experiments/utmr/awsim_supervisor.py` | Autoware/AWSIM helper process를 묶어 episode 단위로 실행합니다. |
-| `experiments/utmr/awsim_batch_runner.py` | baseline, utmr, ablation variant를 batch로 실행합니다. |
+| `experiments/utmr/awsim_supervisor.py` | Autoware/AWSIM helper process를 묶어 episode 단위로 실행합니다. readiness가 끝난 뒤에만 driving timeout을 시작합니다. |
+| `experiments/utmr/awsim_batch_runner.py` | baseline, utmr, ablation variant를 batch로 실행합니다. `--readiness-timeout-s`를 supervisor에 전달합니다. |
 | `autoware/utmr_scripts/probe_live_topics.sh` | 실제 AWSIM/Autoware topic 이름을 probe합니다. |
 
 최신 live batch:
 
 ```text
-experiments/utmr/results/awsim_live_batch_fastpath_20260714_134703
+experiments/utmr/results/awsim_live_batch_5ep_readywait_20260714_142811
 ```
 
-| Method | Success | Collision | Mean speed km/h | Driving score |
-| --- | ---: | ---: | ---: | ---: |
-| WoTE | 100% | 0% | 5.963 | 76.24 |
-| WoTE + UTMR (Ours) | 100% | 0% | 6.096 | 76.27 |
-| WoTE + Uniform Fine | 100% | 0% | 5.478 | 76.14 |
-| UTMR (fine dt only) | 100% | 0% | 8.919 | 76.86 |
-| UTMR (short horizon only) | 100% | 0% | 5.784 | 76.21 |
+| Method | Episodes | Success | Collision source | Fallback rows | Mean speed km/h | Driving score |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| WoTE | 5 | 100% | not measured | 0 | 4.758 +/- 0.802 | 75.99 +/- 0.167 |
+| WoTE + UTMR (Ours) | 5 | 100% | not measured | 0 | 4.142 +/- 0.050 | 75.86 +/- 0.010 |
+| WoTE + Uniform Fine | 5 | 100% | not measured | 0 | 4.839 +/- 0.901 | 76.01 +/- 0.188 |
+| UTMR (fine dt only) | 5 | 100% | not measured | 0 | 4.958 +/- 1.079 | 76.03 +/- 0.225 |
+| UTMR (short horizon only) | 5 | 100% | not measured | 0 | 4.194 +/- 0.094 | 75.87 +/- 0.020 |
 
 산출물:
 
@@ -123,10 +123,20 @@ figures/fig5_score_landscape.png
 
 해석:
 
-- AWSIM/Autoware/UTMR helper path는 이제 5개 variant 모두 observed row를 남깁니다.
-- 이 값은 `episodes=1`인 live smoke라 통계적 결론용은 아닙니다.
-- 논문 수준의 live benchmark로 쓰려면 같은 scenario 또는 추가 scenario에서
-  `5+` episodes per variant 반복이 필요합니다.
+- AWSIM/Autoware/UTMR helper path는 5개 variant x 5 episodes 모두 observed
+  row를 남겼고, fallback row는 `0`입니다.
+- 이 live batch에는 검증된 simulator collision/object topic이 연결되지 않았고,
+  sample scenario에도 static obstacle을 넣지 않았습니다. 따라서 CSV의
+  `collision=False` 값은 성능 metric으로 해석하지 않고, collision은
+  `not measured`로 표기합니다.
+- 이전에는 readiness/route setup이 늦게 끝나는 episode가 fixed timeout을
+  모두 소모해 fallback row가 섞일 수 있었습니다. 이제 supervisor가
+  `run_utmr_demo.sh` readiness 종료를 기다린 뒤 driving timeout을 시작하므로
+  반복 batch가 더 엄격해졌습니다.
+- 이 Shinjuku sample route에서는 full UTMR가 baseline보다 약간 낮고,
+  `fine_dt_only`와 `uniform_fine`이 근소하게 높았습니다. 따라서 live 결과는
+  “통합 경로 안정화” 증거로 보는 것이 맞고, 성능 결론은 추가 route/scenario가
+  필요합니다.
 
 ## 어떤 실험을 했고 어떤 결과가 나왔나
 
@@ -288,7 +298,7 @@ UTMR_MAX_COARSE_DROP=0.5
 ## 다음에 해야 할 일
 
 1. K256 retuned guard를 full `12146`으로 확대할지 결정.
-2. AWSIM live batch를 `5+` episodes per variant로 반복해 평균/표준편차를 확보.
+2. AWSIM scenario/route를 추가해 live 결과가 Shinjuku sample 하나에만 묶이지 않게 만들기.
 3. 논문 표/그림용 최종 정리: K64 full PDM score, K256 check, sensitivity, runtime, AWSIM.
 
 ## 재현 명령
