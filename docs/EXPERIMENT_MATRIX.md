@@ -31,7 +31,7 @@
 | 16 | K256 guarded safety full | K64 효과와 원본 anchor 효과 분리 | PDM score 표 | score `0.8827077445`, baseline보다 `-0.0006072906` | 추가 검증 성공, 개선은 아님 |
 | 17 | K64 guard sensitivity 1000 | guard parameter 근거 확보 | PDM score 표 + summary TSV | best `margin=0.15`, `drop=0.5`, `topN=8` | 성공 |
 | 18 | AWSIM/Autoware helper 구현 | closed-loop/live 실험 준비 | ROS/helper 코드 | planner publisher, collision monitor, metric monitor, batch runner 구현 | 코드 성공 |
-| 19 | AWSIM/Autoware live batch | closed-loop benchmark | episode CSV/표 예정 | 실제 simulator topic 연결 후 실행 필요 | 미실행 |
+| 19 | AWSIM/Autoware live batch smoke | closed-loop/live pipeline 검증 | episode CSV + runtime 표 | 5 variants × 1 episode 실행, route success `0%`, collision `0%`, merged steps `1125` | integration smoke 성공, benchmark는 아직 |
 
 ## 핵심 숫자
 
@@ -51,11 +51,11 @@
 | speed-uncertainty | PNG + CSV | uncertainty figure |
 | selection bias | PNG + CSV | selection behavior figure |
 | score landscape | PNG + CSV | qualitative figure |
-| AWSIM episode metrics | CSV/표 예정 | closed-loop benchmark table |
+| AWSIM episode metrics | CSV/표 | live integration table. 현재는 route success `0%`라 최종 benchmark가 아니라 smoke result |
 
 ## 현재 결론
 
 1. 논문 설정인 `K=64`에서는 guarded safety UTMR가 full NAVSIM에서 baseline보다 높습니다.
 2. 같은 guard를 `K=256`에 그대로 적용하면 baseline보다 약간 낮습니다.
 3. K64 sensitivity는 현재 best 설정 `margin=0.15`, `drop=0.5`, `topN=8`을 뒷받침합니다.
-4. 남은 큰 실험은 AWSIM/Autoware live batch입니다.
+4. AWSIM/Autoware live path는 실제 batch로 한 번 돌았지만, route success가 잡히는 scenario를 맞춘 뒤 5+ episodes per variant로 다시 돌려야 최종 closed-loop benchmark가 됩니다.
