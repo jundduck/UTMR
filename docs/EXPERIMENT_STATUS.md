@@ -1,6 +1,6 @@
 # UTMR Experiment Status
 
-Last updated: 2026-07-13 KST.
+Last updated: 2026-07-14 KST.
 
 ## Scope
 
@@ -9,7 +9,7 @@ from the workshop paper using:
 
 - NAVSIM/WoTE offline PDM scoring.
 - WoTE released checkpoint and NAVSIM metric cache.
-- AWSIM/Autoware live integration scaffolding.
+- AWSIM/Autoware live integration and batch smoke execution.
 
 Everything was kept under `/home/yax/UTMR` during local execution, and no
 dataset symlinks are required. The last asset check reported:
@@ -220,7 +220,7 @@ Finding:
 
 ## AWSIM/Autoware Status
 
-Status: implemented scaffolding, live batch pending.
+Status: live integration batch executed; route-success scenario still pending.
 
 Implemented pieces:
 
@@ -237,13 +237,61 @@ Implemented pieces:
   - `short_horizon_only`
 - Probe script for live topic discovery.
 - Scenario JSON support.
+- Helper cleanup for normal ROS shutdown and Autoware orphan processes.
 
-Still required for live AWSIM:
+Latest live AWSIM run:
 
-- Start AWSIM + Autoware.
-- Run `autoware/utmr_scripts/probe_live_topics.sh`.
-- Confirm real object/collision topics.
-- Run `experiments/utmr/run_awsim_batch.sh`.
+```text
+experiments/utmr/results/awsim_live_batch_metric_20260714_092655
+```
+
+Run configuration:
+
+```text
+variants: baseline, utmr, uniform_fine, fine_dt_only, short_horizon_only
+episodes: 1 per variant
+timeout: 60 s
+startup delay: 18 s
+scenario: experiments/utmr/scenarios/awsim_shinjuku_sample.json
+merged steps: 1125
+merged episode rows: 5
+symlinks under UTMR: 0
+leftover AWSIM/Autoware/UTMR processes: 0
+```
+
+Closed-loop episode result:
+
+| Method | Episodes | Collision | Success | Mean speed | Driving score |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| WoTE | 1 | 0% | 0% | 28.8 km/h | 0.0 |
+| WoTE + UTMR (Ours) | 1 | 0% | 0% | 28.8 km/h | 0.0 |
+| WoTE + Uniform Fine | 1 | 0% | 0% | 28.8 km/h | 0.0 |
+| UTMR (fine dt only) | 1 | 0% | 0% | 28.8 km/h | 0.0 |
+| UTMR (short horizon only) | 1 | 0% | 0% | 28.8 km/h | 0.0 |
+
+Runtime from live step logs:
+
+| Method | Trigger rate | Mean latency | P99 latency |
+| --- | ---: | ---: | ---: |
+| WoTE (coarse) | 0% | 6.49 ms | 20.93 ms |
+| WoTE + UTMR (Full) | 100% | 13.46 ms | 34.74 ms |
+| WoTE + Uniform Fine | 100% | 13.93 ms | 40.03 ms |
+
+Interpretation:
+
+- The AWSIM + Autoware + UTMR planner + reducer path runs end-to-end.
+- The current Shinjuku sample scenario is not yet a useful performance
+  benchmark because route success is `0%` for every variant.
+- Treat this result as a live integration smoke. The NAVSIM full results remain
+  the meaningful performance evidence.
+
+Still required for stronger live AWSIM:
+
+- Improve route initialization or scenario poses so route arrival is detected.
+- Confirm real object/collision topics with `probe_live_topics.sh` when
+  perception/object topics are enabled.
+- Repeat live batch with at least 5 episodes per variant once success is
+  meaningful.
 
 ## Commands Used
 
@@ -385,6 +433,6 @@ experiments/utmr/check_assets.sh
 ## Next Experiments
 
 1. Decide whether to retune a separate K256 guard/weight setting.
-2. Run AWSIM/Autoware live batch after topic probing.
-3. Convert the final full/subset/sensitivity results into paper-ready tables
+2. Improve AWSIM route-success scenario and repeat live batch with more episodes.
+3. Convert the final full/subset/sensitivity/live results into paper-ready tables
    and figures.

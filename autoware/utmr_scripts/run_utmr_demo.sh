@@ -63,17 +63,27 @@ start_helper() {
   fi
 }
 
-start_helper pointcloud_relay "$HELPER_DIR/pointcloud_relay.py" /tmp/utmr-pointcloud-relay.log
-start_helper mrm_normalizer "$HELPER_DIR/mrm_normalizer.py" /tmp/utmr-mrm-normalizer.log
-start_helper engage_injector "$HELPER_DIR/engage_injector.py" /tmp/utmr-engage-injector.log
-start_helper drive_gear_injector "$HELPER_DIR/drive_gear_injector.py" /tmp/utmr-drive-gear-injector.log
+helper_log() {
+  local file_name="$1"
+  if [[ -n "${UTMR_HELPER_LOG_DIR:-}" ]]; then
+    mkdir -p "$UTMR_HELPER_LOG_DIR"
+    printf '%s/%s\n' "$UTMR_HELPER_LOG_DIR" "$file_name"
+  else
+    printf '/tmp/%s\n' "$file_name"
+  fi
+}
+
+start_helper pointcloud_relay "$HELPER_DIR/pointcloud_relay.py" "$(helper_log utmr-pointcloud-relay.log)"
+start_helper mrm_normalizer "$HELPER_DIR/mrm_normalizer.py" "$(helper_log utmr-mrm-normalizer.log)"
+start_helper engage_injector "$HELPER_DIR/engage_injector.py" "$(helper_log utmr-engage-injector.log)"
+start_helper drive_gear_injector "$HELPER_DIR/drive_gear_injector.py" "$(helper_log utmr-drive-gear-injector.log)"
 
 if [[ "${UTMR_START_COLLISION_MONITOR:-1}" != "0" ]]; then
-  start_helper collision_monitor "$HELPER_DIR/collision_monitor.py" /tmp/utmr-collision-monitor.log
+  start_helper collision_monitor "$HELPER_DIR/collision_monitor.py" "$(helper_log utmr-collision-monitor.log)"
 fi
 
 if [[ "${UTMR_START_METRIC_MONITOR:-1}" != "0" && -n "${UTMR_EPISODE_CSV:-}" ]]; then
-  start_helper episode_metric_monitor "$HELPER_DIR/episode_metric_monitor.py" /tmp/utmr-episode-metric-monitor.log
+  start_helper episode_metric_monitor "$HELPER_DIR/episode_metric_monitor.py" "$(helper_log utmr-episode-metric-monitor.log)"
 fi
 
 echo "waiting for Autoware services..."
@@ -104,6 +114,6 @@ if service_exists /control/vehicle_cmd_gate/set_stop; then
 fi
 
 mkdir -p "$(dirname "$UTMR_STEP_LOG")"
-start_helper utmr_planner "$HELPER_DIR/utmr_planner_node.py" /tmp/utmr-planner-node.log
+start_helper utmr_planner "$HELPER_DIR/utmr_planner_node.py" "$(helper_log utmr-planner-node.log)"
 
 echo "done. UTMR planner mode=$UTMR_MODE, step log=$UTMR_STEP_LOG"

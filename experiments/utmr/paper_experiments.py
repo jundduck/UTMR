@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# noqa: SIZE_OK - single-file paper experiment CLI/reducer kept for reproducibility.
 from __future__ import annotations
 
 import argparse
@@ -441,7 +442,7 @@ def latency_for_variant(row: Dict[str, Any], variant: str) -> float:
     method_variant = str(row.get("method_variant", "") or "")
     if method_variant:
         aliases = {
-            "wote_coarse": {"baseline", "wote_coarse", "WoTE", "WoTE (coarse)"},
+            "wote_coarse": {"baseline", "coarse", "wote_coarse", "WoTE", "WoTE (coarse)"},
             "wote_utmr": {"utmr", "wote_utmr", "WoTE + UTMR (Ours)", "WoTE + UTMR (Full)"},
             "wote_uniform_fine": {"uniform_fine", "wote_uniform_fine", "WoTE + Uniform Fine"},
             "utmr_fine_dt_only": {"fine_dt_only", "utmr_fine_dt_only", "UTMR (fine dt only)"},

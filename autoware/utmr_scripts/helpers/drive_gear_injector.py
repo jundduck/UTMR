@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import rclpy
+from rclpy._rclpy_pybind11 import RCLError
 from autoware_vehicle_msgs.msg import GearCommand
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 
@@ -28,9 +30,12 @@ def main():
     node = DriveGearInjector()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException, RCLError):
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

@@ -418,7 +418,10 @@ UTMR_MAX_COARSE_DROP=0.5
 
 ## 6. AWSIM/Autoware 구현 상태
 
-AWSIM live 결과는 아직 완료되지 않았지만, 실행 scaffolding은 구현했습니다.
+AWSIM live batch도 실행했습니다. 현재 결과는 closed-loop 성능 비교라기보다
+AWSIM + Autoware + UTMR planner + reducer가 한 번에 도는지 확인한 live
+integration smoke입니다. Sample route arrival이 잡히지 않아 모든 variant가
+timeout으로 끝났기 때문입니다.
 
 | 코드 | 역할 |
 | --- | --- |
@@ -429,12 +432,51 @@ AWSIM live 결과는 아직 완료되지 않았지만, 실행 scaffolding은 구
 | `experiments/utmr/awsim_batch_runner.py` | variant batch 실행 |
 | `experiments/utmr/scenarios/awsim_shinjuku_sample.json` | AWSIM sample scenario |
 
+추가로 보강한 점:
+
+- ROS helper node가 정상 shutdown 중 남기던 `ExternalShutdownException`,
+  `RCLError` trace를 정상 종료로 처리했습니다.
+- episode CSV가 비어 있으면 supervisor가 step log 기반 fallback row를 씁니다.
+- Autoware launch가 남기는 orphan process를 root-specific pattern으로 정리합니다.
+- `paper_experiments.py`가 AWSIM `coarse` method_variant의 baseline latency를
+  runtime table에 반영하도록 alias를 보강했습니다.
+
+최신 live run:
+
+```text
+experiments/utmr/results/awsim_live_batch_metric_20260714_092655
+```
+
+| Method | Episodes | Collision | Success | Mean speed | Driving score |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| WoTE | 1 | 0% | 0% | 28.8 km/h | 0.0 |
+| WoTE + UTMR (Ours) | 1 | 0% | 0% | 28.8 km/h | 0.0 |
+| WoTE + Uniform Fine | 1 | 0% | 0% | 28.8 km/h | 0.0 |
+| UTMR (fine dt only) | 1 | 0% | 0% | 28.8 km/h | 0.0 |
+| UTMR (short horizon only) | 1 | 0% | 0% | 28.8 km/h | 0.0 |
+
+Runtime:
+
+| Method | Trigger rate | Mean latency | P99 latency |
+| --- | ---: | ---: | ---: |
+| WoTE (coarse) | 0% | 6.49 ms | 20.93 ms |
+| WoTE + UTMR (Full) | 100% | 13.46 ms | 34.74 ms |
+| WoTE + Uniform Fine | 100% | 13.93 ms | 40.03 ms |
+
+해석:
+
+- live batch는 5개 variant 모두 실행됐고, merged step log `1125` rows와
+  episode CSV `5` rows를 만들었습니다.
+- helper tracebacks, leftover AWSIM/Autoware/UTMR processes, UTMR symlinks 모두
+  최종 확인 기준 `0`입니다.
+- 하지만 route success가 모든 variant에서 `0%`라서, 논문용 AWSIM 성능 표로는
+  아직 부족합니다.
+
 남은 작업:
 
-1. AWSIM과 Autoware를 실제로 켭니다.
-2. `autoware/utmr_scripts/probe_live_topics.sh`로 topic 이름을 확인합니다.
-3. object/collision topic을 환경변수로 넣습니다.
-4. `experiments/utmr/run_awsim_batch.sh`를 실행합니다.
+1. route arrival이 잡히는 scenario/initial pose/goal pose를 다시 맞춥니다.
+2. perception/object topic을 켠 상태에서 `probe_live_topics.sh`로 topic을 확정합니다.
+3. 성공이 잡히는 scenario에서 5+ episodes per variant로 다시 실행합니다.
 
 ## 7. 긴 실행 명령
 
@@ -583,4 +625,5 @@ experiments/utmr/check_assets.sh
 6. guarded reranking은 full `12146`-scenario 평가에서도 baseline보다 높았습니다.
 7. K64 sensitivity에서도 `margin=0.15`, `drop=0.5`, `topN=8`이 가장 좋았습니다.
 8. K256 원본 anchor에서는 같은 guard가 baseline보다 약간 낮아 별도 retuning이 필요합니다.
-9. 다음 핵심 검증은 AWSIM/Autoware live batch입니다.
+9. AWSIM/Autoware live path는 실행됐지만, route success가 잡히는 scenario를
+   추가로 맞춰야 최종 closed-loop 성능 비교가 됩니다.

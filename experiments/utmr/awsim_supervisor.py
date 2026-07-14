@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# noqa: SIZE_OK - single-file AWSIM episode supervisor for reproducible paper runs.
 from __future__ import annotations
 
 import argparse
@@ -155,7 +156,7 @@ def command_env(root: Path, args: argparse.Namespace, step_log: Path) -> Dict[st
             "UTMR_EPISODE_ID": args.episode_id,
             "UTMR_METHOD": METHOD_NAMES[args.variant],
             "UTMR_VARIANT": args.variant,
-            "UTMR_START_METRIC_MONITOR": "0",
+            "UTMR_START_METRIC_MONITOR": "0" if args.skip_monitor else "1",
             "UTMR_COLLISION_TOPIC": env.get("UTMR_COLLISION_TOPIC", "/utmr/collision"),
             "UTMR_COLLISION_OUTPUT_TOPIC": env.get("UTMR_COLLISION_OUTPUT_TOPIC", "/utmr/collision"),
             "RVIZ": env.get("RVIZ", "false"),
@@ -219,7 +220,47 @@ def cleanup_helpers(root: Path, dry_run: bool, phase: str) -> None:
         subprocess.run(command, cwd=str(root), check=False)
 
 
-def write_episode_row(path: Path, args: argparse.Namespace) -> None:
+def cleanup_autoware_orphans(root: Path, dry_run: bool, phase: str) -> None:
+    pattern = str(root / "autoware/install") + "/"
+    print(f"[cleanup:{phase}] orphan pattern={pattern}")
+    if dry_run:
+        return
+    subprocess.run(["pkill", "-TERM", "-f", pattern], cwd=str(root), check=False)
+    time.sleep(0.5)
+    subprocess.run(["pkill", "-KILL", "-f", pattern], cwd=str(root), check=False)
+
+
+def summarize_step_log(path: Path) -> Dict[str, str]:
+    speeds: List[float] = []
+    collision = False
+    try:
+        with path.open("r", encoding="utf-8") as fp:
+            for line in fp:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if "ego_speed_kmh" in row:
+                    speeds.append(float(row["ego_speed_kmh"]))
+                collision_mask = row.get("collision_mask", [])
+                if isinstance(collision_mask, list) and any(bool(value) for value in collision_mask):
+                    collision = True
+    except FileNotFoundError:
+        return {"mean_speed_kmh": "", "collision": "False"}
+    mean_speed = "" if not speeds else str(sum(speeds) / len(speeds))
+    return {"mean_speed_kmh": mean_speed, "collision": str(collision)}
+
+
+def episode_csv_has_rows(path: Path) -> bool:
+    if not path.exists():
+        return False
+    with path.open("r", encoding="utf-8") as fp:
+        return sum(1 for _ in fp) > 1
+
+
+def write_episode_row(path: Path, args: argparse.Namespace, step_log: Path) -> None:
+    step_summary = summarize_step_log(step_log)
+    scenario = load_scenario(args)
+    route_length_m = scenario.get("route_length_m", "")
     path.parent.mkdir(parents=True, exist_ok=True)
     exists = path.exists()
     with path.open("a", encoding="utf-8", newline="") as fp:
@@ -230,6 +271,8 @@ def write_episode_row(path: Path, args: argparse.Namespace) -> None:
             "collision",
             "success",
             "timeout",
+            "distance_m",
+            "route_length_m",
             "mean_speed_kmh",
             "driving_score",
         ]
@@ -241,11 +284,13 @@ def write_episode_row(path: Path, args: argparse.Namespace) -> None:
                 "method": METHOD_NAMES[args.variant],
                 "variant": args.variant,
                 "episode_id": args.episode_id,
-                "collision": False,
+                "collision": step_summary["collision"],
                 "success": False,
                 "timeout": True,
-                "mean_speed_kmh": "",
-                "driving_score": "",
+                "distance_m": "",
+                "route_length_m": route_length_m,
+                "mean_speed_kmh": step_summary["mean_speed_kmh"],
+                "driving_score": 0.0,
             }
         )
 
@@ -253,6 +298,8 @@ def write_episode_row(path: Path, args: argparse.Namespace) -> None:
 def main() -> None:
     args = parse_args()
     root = utmr_root()
+    if not args.out_dir.is_absolute():
+        args.out_dir = root / args.out_dir
     scenario = load_scenario(args)
     scenario_id = sanitize_id(str(scenario.get("scenario_id", ""))) if scenario else ""
     episode_id = args.episode_id or f"{args.variant}_{scenario_id or int(time.time())}"
@@ -263,10 +310,12 @@ def main() -> None:
     step_log = raw_dir / f"{episode_id}_steps.jsonl"
     episode_csv = raw_dir / "awsim_episodes.csv"
     env = command_env(root, args, step_log)
+    env["UTMR_HELPER_LOG_DIR"] = str(log_dir)
 
     processes = []
     try:
         cleanup_helpers(root, args.dry_run, "before")
+        cleanup_autoware_orphans(root, args.dry_run, "before")
         if not args.skip_awsim:
             processes.append(
                 start_process(
@@ -306,26 +355,15 @@ def main() -> None:
             )
         )
 
-        if not args.skip_monitor:
-            processes.append(
-                start_process(
-                    "metric_monitor",
-                    [str(root / "autoware/utmr_scripts/helpers/episode_metric_monitor.py")],
-                    root,
-                    env,
-                    log_dir / f"{episode_id}_metric_monitor.log",
-                    args.dry_run,
-                )
-            )
-
         if not args.dry_run:
             time.sleep(args.timeout_s)
-            if args.skip_monitor:
-                write_episode_row(episode_csv, args)
     finally:
         if not args.dry_run:
             terminate_processes(processes)
             cleanup_helpers(root, args.dry_run, "after")
+            cleanup_autoware_orphans(root, args.dry_run, "after")
+            if not episode_csv_has_rows(episode_csv):
+                write_episode_row(episode_csv, args, step_log)
 
     print(f"step log: {step_log}")
     print(f"episode csv: {episode_csv}")

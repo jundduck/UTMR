@@ -2,9 +2,11 @@
 import math
 
 import rclpy
+from rclpy._rclpy_pybind11 import RCLError
 from autoware_planning_msgs.msg import Trajectory
 from autoware_planning_msgs.msg import TrajectoryPoint
 from geometry_msgs.msg import Quaternion
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 
@@ -67,9 +69,12 @@ def main():
     node = StraightTrajectoryPublisher()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException, RCLError):
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

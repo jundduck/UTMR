@@ -7,8 +7,10 @@ import time
 from pathlib import Path
 
 import rclpy
+from rclpy._rclpy_pybind11 import RCLError
 from autoware_adapi_v1_msgs.msg import RouteState
 from autoware_localization_msgs.msg import KinematicState
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from std_msgs.msg import Bool
@@ -147,13 +149,15 @@ def main():
 
     def handle_signal(signum, frame):
         node.write_row()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
+        raise SystemExit(0)
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException, RCLError):
         pass
     finally:
         node.write_row()

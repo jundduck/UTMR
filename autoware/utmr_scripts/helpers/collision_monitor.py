@@ -4,10 +4,12 @@ import math
 import os
 
 import rclpy
+from rclpy._rclpy_pybind11 import RCLError
 from autoware_localization_msgs.msg import KinematicState
 from autoware_perception_msgs.msg import DetectedObjects
 from autoware_perception_msgs.msg import PredictedObjects
 from autoware_perception_msgs.msg import TrackedObjects
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from std_msgs.msg import Bool
@@ -143,9 +145,12 @@ def main():
     node = CollisionMonitor()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException, RCLError):
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
