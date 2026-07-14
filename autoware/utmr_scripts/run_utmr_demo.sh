@@ -33,6 +33,7 @@ UTMR_COLLISION_TOPIC="${UTMR_COLLISION_TOPIC:-/utmr/collision}"
 UTMR_COLLISION_OUTPUT_TOPIC="${UTMR_COLLISION_OUTPUT_TOPIC:-/utmr/collision}"
 UTMR_SERVICE_LIST_TIMEOUT_S="${UTMR_SERVICE_LIST_TIMEOUT_S:-8}"
 UTMR_SERVICE_CALL_TIMEOUT_S="${UTMR_SERVICE_CALL_TIMEOUT_S:-15}"
+UTMR_ROUTE_UUID_BYTES="${UTMR_ROUTE_UUID_BYTES:-[17,17,17,17,34,34,51,51,68,68,85,85,85,85,85,85]}"
 export UTMR_MODE
 export UTMR_STEP_LOG
 export UTMR_GOAL_X
@@ -44,6 +45,18 @@ export UTMR_FALLBACK_Z
 export UTMR_FALLBACK_YAW
 export UTMR_COLLISION_TOPIC
 export UTMR_COLLISION_OUTPUT_TOPIC
+export UTMR_INIT_X
+export UTMR_INIT_Y
+export UTMR_INIT_Z
+export UTMR_INIT_QX
+export UTMR_INIT_QY
+export UTMR_INIT_QZ
+export UTMR_INIT_QW
+export UTMR_GOAL_Z
+export UTMR_GOAL_QX
+export UTMR_GOAL_QY
+export UTMR_GOAL_QZ
+export UTMR_GOAL_QW
 
 source /opt/ros/humble/setup.bash
 source "$SCRIPT_DIR/setup_runtime_overlay.sh"
@@ -54,12 +67,22 @@ start_helper() {
   local name="$1"
   local script="$2"
   local log="$3"
+  local pid_dir="${UTMR_HELPER_PID_DIR:-${UTMR_HELPER_LOG_DIR:-}}"
+  local pid_file=""
+  if [[ -n "$pid_dir" ]]; then
+    mkdir -p "$pid_dir"
+    pid_file="$pid_dir/$name.pid"
+  fi
 
   if pgrep -f "$script" >/dev/null; then
     echo "$name already running"
   else
     nohup python3 "$script" >"$log" 2>&1 &
-    echo "$name started pid=$!"
+    local pid="$!"
+    if [[ -n "$pid_file" ]]; then
+      printf '%s\n' "$pid" >"$pid_file"
+    fi
+    echo "$name started pid=$pid"
   fi
 }
 
@@ -74,9 +97,16 @@ helper_log() {
 }
 
 start_helper pointcloud_relay "$HELPER_DIR/pointcloud_relay.py" "$(helper_log utmr-pointcloud-relay.log)"
+if [[ "${UTMR_START_STATIC_TF_INJECTOR:-1}" != "0" ]]; then
+  start_helper static_tf_injector "$HELPER_DIR/static_tf_injector.py" "$(helper_log utmr-static-tf-injector.log)"
+fi
 start_helper mrm_normalizer "$HELPER_DIR/mrm_normalizer.py" "$(helper_log utmr-mrm-normalizer.log)"
 start_helper engage_injector "$HELPER_DIR/engage_injector.py" "$(helper_log utmr-engage-injector.log)"
 start_helper drive_gear_injector "$HELPER_DIR/drive_gear_injector.py" "$(helper_log utmr-drive-gear-injector.log)"
+
+if [[ "${UTMR_START_ROUTE_PUBLISHER:-1}" != "0" ]]; then
+  start_helper route_publisher "$HELPER_DIR/route_publisher.py" "$(helper_log utmr-route-publisher.log)"
+fi
 
 if [[ "${UTMR_START_COLLISION_MONITOR:-1}" != "0" ]]; then
   start_helper collision_monitor "$HELPER_DIR/collision_monitor.py" "$(helper_log utmr-collision-monitor.log)"
@@ -85,6 +115,9 @@ fi
 if [[ "${UTMR_START_METRIC_MONITOR:-1}" != "0" && -n "${UTMR_EPISODE_CSV:-}" ]]; then
   start_helper episode_metric_monitor "$HELPER_DIR/episode_metric_monitor.py" "$(helper_log utmr-episode-metric-monitor.log)"
 fi
+
+mkdir -p "$(dirname "$UTMR_STEP_LOG")"
+start_helper utmr_planner "$HELPER_DIR/utmr_planner_node.py" "$(helper_log utmr-planner-node.log)"
 
 echo "waiting for Autoware services..."
 sleep 3
@@ -105,6 +138,11 @@ if service_exists /api/routing/set_route_points; then
   timeout "$UTMR_SERVICE_CALL_TIMEOUT_S" ros2 service call /api/routing/set_route_points autoware_adapi_v1_msgs/srv/SetRoutePoints "$ROUTE_REQUEST" || true
 fi
 
+if service_exists /planning/set_waypoint_route; then
+  WAYPOINT_ROUTE_REQUEST="{header: {frame_id: map}, goal_pose: {position: {x: $UTMR_GOAL_X, y: $UTMR_GOAL_Y, z: $UTMR_GOAL_Z}, orientation: {x: $UTMR_GOAL_QX, y: $UTMR_GOAL_QY, z: $UTMR_GOAL_QZ, w: $UTMR_GOAL_QW}}, waypoints: [], uuid: {uuid: $UTMR_ROUTE_UUID_BYTES}, allow_modification: true}"
+  timeout "$UTMR_SERVICE_CALL_TIMEOUT_S" ros2 service call /planning/set_waypoint_route autoware_planning_msgs/srv/SetWaypointRoute "$WAYPOINT_ROUTE_REQUEST" || true
+fi
+
 if service_exists /system/operation_mode/change_operation_mode; then
   timeout "$UTMR_SERVICE_CALL_TIMEOUT_S" ros2 service call /system/operation_mode/change_operation_mode autoware_system_msgs/srv/ChangeOperationMode "{mode: 2}" || true
 fi
@@ -112,8 +150,5 @@ fi
 if service_exists /control/vehicle_cmd_gate/set_stop; then
   timeout "$UTMR_SERVICE_CALL_TIMEOUT_S" ros2 service call /control/vehicle_cmd_gate/set_stop tier4_control_msgs/srv/SetStop "{stop: false, request_source: utmr}" || true
 fi
-
-mkdir -p "$(dirname "$UTMR_STEP_LOG")"
-start_helper utmr_planner "$HELPER_DIR/utmr_planner_node.py" "$(helper_log utmr-planner-node.log)"
 
 echo "done. UTMR planner mode=$UTMR_MODE, step log=$UTMR_STEP_LOG"

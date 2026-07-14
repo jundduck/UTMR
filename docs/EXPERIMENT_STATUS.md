@@ -116,7 +116,7 @@ motivated the guarded accept condition.
 
 Status: complete and positive.
 
-| Method | Success | Failed | PDM score | Selected changed / accepted |
+| Method | Success | Failed | PDM score | Rerank accepted |
 | --- | ---: | ---: | ---: | ---: |
 | baseline | 1000 | 0 | 0.8638675087 | 0.0% |
 | guarded safety UTMR | 1000 | 0 | 0.8720460220 | 9.5% |
@@ -130,7 +130,7 @@ Status: complete and positive.
 
 Final result:
 
-| Method | Success | Failed | PDM score | Selected changed / accepted |
+| Method | Success | Failed | PDM score | Rerank accepted |
 | --- | ---: | ---: | ---: | ---: |
 | baseline | 12146 | 0 | 0.8471632864 | 0.0% |
 | guarded safety UTMR | 12146 | 0 | 0.8542971577 | 9.8139% |
@@ -167,7 +167,7 @@ This is not the paper's main setting. The paper uses `K=64`, while this run
 uses the released WoTE `K=256` anchors/cache to check whether the same guarded
 reranking transfers to the stronger original candidate set.
 
-| Method | Success | Failed | PDM score | Selected changed / accepted |
+| Method | Success | Failed | PDM score | Rerank accepted |
 | --- | ---: | ---: | ---: | ---: |
 | K256 baseline | 12146 | 0 | 0.8833150351 | 0.0% |
 | K256 guarded safety UTMR | 12146 | 0 | 0.8827077445 | 8.1014% |
@@ -204,7 +204,7 @@ Top sensitivity results:
 
 | Rank | `UTMR_FINE_MARGIN_MIN` | `UTMR_MAX_COARSE_DROP` | `UTMR_TOP_N` | PDM score | Delta vs baseline | Accepted |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 0.15 | 0.5 | 8 | 0.8720460220 | +0.0081785132 | 9.5% |
+| 1 | 0.15 | 0.5 | 8 | 0.8720460220 | +0.0081785133 | 9.5% |
 | 2 | 0.10 | 0.5 | 8 | 0.8709648289 | +0.0070973202 | 17.4% |
 | 3 | 0.20 | 0.5 | 8 | 0.8695653544 | +0.0056978457 | 7.3% |
 | 4 | 0.10 | 0.5 | 16 | 0.8681040503 | +0.0042365416 | 14.0% |
@@ -220,7 +220,7 @@ Finding:
 
 ## AWSIM/Autoware Status
 
-Status: live integration batch executed; route-success scenario still pending.
+Status: live integration smoke executed; route-success scenario still pending.
 
 Implemented pieces:
 
@@ -229,6 +229,11 @@ Implemented pieces:
 - AWSIM object topic adapter for predicted/tracked/detected objects.
 - Collision monitor bridge.
 - Episode metric monitor.
+- Synthetic route publisher for `/planning/mission_planning/route`.
+- Drive/command gate injector for gear, turn, hazard, control, gate mode, and
+  external heartbeat topics.
+- Static/dynamic TF injector for AWSIM demo frame mismatch around
+  `tamagawa/imu_link` and `velodyne_top`.
 - Batch runner over variants:
   - `baseline`
   - `utmr`
@@ -237,52 +242,63 @@ Implemented pieces:
   - `short_horizon_only`
 - Probe script for live topic discovery.
 - Scenario JSON support.
-- Helper cleanup for normal ROS shutdown and Autoware orphan processes.
+- Scoped helper cleanup using recorded helper PIDs and script paths. Broad
+  process killing was removed.
+- Episode reducer ignores supervisor fallback rows for closed-loop tables so
+  missing observed metrics do not look like real driving results.
 
-Latest live AWSIM run:
+Latest AWSIM smoke:
 
 ```text
-experiments/utmr/results/awsim_live_batch_metric_20260714_092655
+experiments/utmr/results/awsim_dynamic_tf_smoke_20260714_101654
 ```
 
 Run configuration:
 
 ```text
-variants: baseline, utmr, uniform_fine, fine_dt_only, short_horizon_only
-episodes: 1 per variant
-timeout: 60 s
-startup delay: 18 s
+variant: utmr
+episodes: 1
+timeout: 75 s
+startup delay: 10 s
 scenario: experiments/utmr/scenarios/awsim_shinjuku_sample.json
-merged steps: 1125
-merged episode rows: 5
+planner step rows: 693
+episode rows: 1 observed row
 symlinks under UTMR: 0
 leftover AWSIM/Autoware/UTMR processes: 0
 ```
 
 Closed-loop episode result:
 
-| Method | Episodes | Collision | Success | Mean speed | Driving score |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| WoTE | 1 | 0% | 0% | 28.8 km/h | 0.0 |
-| WoTE + UTMR (Ours) | 1 | 0% | 0% | 28.8 km/h | 0.0 |
-| WoTE + Uniform Fine | 1 | 0% | 0% | 28.8 km/h | 0.0 |
-| UTMR (fine dt only) | 1 | 0% | 0% | 28.8 km/h | 0.0 |
-| UTMR (short horizon only) | 1 | 0% | 0% | 28.8 km/h | 0.0 |
+| Method | Collision | Success | Timeout | Distance | Mean speed | Driving score | Metric source |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| WoTE + UTMR (Ours) | False | False | True | `nan` | `nan` | 0.0 | observed |
 
-Runtime from live step logs:
+Latest warning counts:
 
-| Method | Trigger rate | Mean latency | P99 latency |
-| --- | ---: | ---: | ---: |
-| WoTE (coarse) | 0% | 6.49 ms | 20.93 ms |
-| WoTE + UTMR (Full) | 100% | 13.46 ms | 34.74 ms |
-| WoTE + Uniform Fine | 100% | 13.93 ms | 40.03 ms |
+| Pattern | Count |
+| --- | ---: |
+| `mission_planning/route has not received` | 0 |
+| `waiting for route msg` | 0 |
+| `GearCommand` | 2 |
+| `TurnIndicatorsCommand` | 3 |
+| `HazardLightsCommand` | 3 |
+| `Emergency!` | 9 |
+| `heartbeat is timeout` | 1 |
+| `Please publish TF base_link to tamagawa/imu_link` | 3 |
+| `Please publish TF velodyne_top to base_link` | 1 |
+| `routing/state` | 11 |
+| `/adapi/container node is duplicated` | 9 |
 
 Interpretation:
 
-- The AWSIM + Autoware + UTMR planner + reducer path runs end-to-end.
-- The current Shinjuku sample scenario is not yet a useful performance
-  benchmark because route success is `0%` for every variant.
-- Treat this result as a live integration smoke. The NAVSIM full results remain
+- The AWSIM + Autoware + UTMR planner + reducer path runs end-to-end and now
+  produces an observed metric row, not just a supervisor fallback row.
+- Route-missing and route-waiting messages were removed by the route publisher.
+- Command gate and TF errors were reduced by the drive injector and dynamic TF
+  injector, but are not fully gone in longer runs.
+- The current Shinjuku sample scenario is still not a useful performance
+  benchmark because route success remains `0%`.
+- Treat AWSIM results as live integration smoke. The NAVSIM full results remain
   the meaningful performance evidence.
 
 Still required for stronger live AWSIM:

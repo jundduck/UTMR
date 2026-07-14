@@ -10,6 +10,7 @@ import rclpy
 from rclpy._rclpy_pybind11 import RCLError
 from autoware_adapi_v1_msgs.msg import RouteState
 from autoware_localization_msgs.msg import KinematicState
+from helper_shutdown import is_expected_shutdown_error
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -94,6 +95,8 @@ class EpisodeMetricMonitor(Node):
             "route_length_m",
             "mean_speed_kmh",
             "driving_score",
+            "metric_source",
+            "metric_note",
         ]
         with path.open("a", encoding="utf-8", newline="") as fp:
             writer = csv.DictWriter(fp, fieldnames=fieldnames)
@@ -111,6 +114,8 @@ class EpisodeMetricMonitor(Node):
                     "route_length_m": self.route_length_m if self.route_length_m is not None else "",
                     "mean_speed_kmh": mean_speed,
                     "driving_score": driving_score,
+                    "metric_source": "observed",
+                    "metric_note": "",
                 }
             )
         self.get_logger().info(f"wrote episode metrics to {path}")
@@ -157,8 +162,11 @@ def main():
     signal.signal(signal.SIGTERM, handle_signal)
     try:
         rclpy.spin(node)
-    except (KeyboardInterrupt, ExternalShutdownException, RCLError):
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except RCLError as exc:
+        if not is_expected_shutdown_error(exc):
+            raise
     finally:
         node.write_row()
         node.destroy_node()

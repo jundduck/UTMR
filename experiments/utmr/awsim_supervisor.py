@@ -197,37 +197,29 @@ def start_process(name: str, command: List[str], cwd: Path, env: Dict[str, str],
 
 def terminate_processes(processes) -> None:
     for process in reversed([p for p in processes if p is not None]):
-        if process.poll() is not None:
-            continue
         try:
             os.killpg(process.pid, signal.SIGINT)
         except ProcessLookupError:
             pass
     time.sleep(3.0)
     for process in reversed([p for p in processes if p is not None]):
-        if process.poll() is not None:
-            continue
         try:
             os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
+    time.sleep(2.0)
+    for process in reversed([p for p in processes if p is not None]):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
-def cleanup_helpers(root: Path, dry_run: bool, phase: str) -> None:
+def cleanup_helpers(root: Path, env: Dict[str, str], dry_run: bool, phase: str) -> None:
     command = [str(root / "autoware/utmr_scripts/stop_demo_helpers.sh")]
     print(f"[cleanup:{phase}] {' '.join(command)}")
     if not dry_run:
-        subprocess.run(command, cwd=str(root), check=False)
-
-
-def cleanup_autoware_orphans(root: Path, dry_run: bool, phase: str) -> None:
-    pattern = str(root / "autoware/install") + "/"
-    print(f"[cleanup:{phase}] orphan pattern={pattern}")
-    if dry_run:
-        return
-    subprocess.run(["pkill", "-TERM", "-f", pattern], cwd=str(root), check=False)
-    time.sleep(0.5)
-    subprocess.run(["pkill", "-KILL", "-f", pattern], cwd=str(root), check=False)
+        subprocess.run(command, cwd=str(root), env=env, check=False)
 
 
 def summarize_step_log(path: Path) -> Dict[str, str]:
@@ -245,9 +237,9 @@ def summarize_step_log(path: Path) -> Dict[str, str]:
                 if isinstance(collision_mask, list) and any(bool(value) for value in collision_mask):
                     collision = True
     except FileNotFoundError:
-        return {"mean_speed_kmh": "", "collision": "False"}
+        return {"planner_mean_speed_kmh": "", "predicted_collision": "False"}
     mean_speed = "" if not speeds else str(sum(speeds) / len(speeds))
-    return {"mean_speed_kmh": mean_speed, "collision": str(collision)}
+    return {"planner_mean_speed_kmh": mean_speed, "predicted_collision": str(collision)}
 
 
 def episode_csv_has_rows(path: Path) -> bool:
@@ -275,6 +267,8 @@ def write_episode_row(path: Path, args: argparse.Namespace, step_log: Path) -> N
             "route_length_m",
             "mean_speed_kmh",
             "driving_score",
+            "metric_source",
+            "metric_note",
         ]
         writer = csv.DictWriter(fp, fieldnames=fieldnames)
         if not exists:
@@ -284,13 +278,19 @@ def write_episode_row(path: Path, args: argparse.Namespace, step_log: Path) -> N
                 "method": METHOD_NAMES[args.variant],
                 "variant": args.variant,
                 "episode_id": args.episode_id,
-                "collision": step_summary["collision"],
+                "collision": "",
                 "success": False,
                 "timeout": True,
                 "distance_m": "",
                 "route_length_m": route_length_m,
-                "mean_speed_kmh": step_summary["mean_speed_kmh"],
-                "driving_score": 0.0,
+                "mean_speed_kmh": "",
+                "driving_score": "",
+                "metric_source": "fallback",
+                "metric_note": (
+                    "episode_metric_monitor did not flush; "
+                    f"planner_mean_speed_kmh={step_summary['planner_mean_speed_kmh']}; "
+                    f"predicted_collision={step_summary['predicted_collision']}"
+                ),
             }
         )
 
@@ -311,11 +311,11 @@ def main() -> None:
     episode_csv = raw_dir / "awsim_episodes.csv"
     env = command_env(root, args, step_log)
     env["UTMR_HELPER_LOG_DIR"] = str(log_dir)
+    env["UTMR_HELPER_PID_DIR"] = str(log_dir / "helper_pids")
 
     processes = []
     try:
-        cleanup_helpers(root, args.dry_run, "before")
-        cleanup_autoware_orphans(root, args.dry_run, "before")
+        cleanup_helpers(root, env, args.dry_run, "before")
         if not args.skip_awsim:
             processes.append(
                 start_process(
@@ -360,8 +360,7 @@ def main() -> None:
     finally:
         if not args.dry_run:
             terminate_processes(processes)
-            cleanup_helpers(root, args.dry_run, "after")
-            cleanup_autoware_orphans(root, args.dry_run, "after")
+            cleanup_helpers(root, env, args.dry_run, "after")
             if not episode_csv_has_rows(episode_csv):
                 write_episode_row(episode_csv, args, step_log)
 

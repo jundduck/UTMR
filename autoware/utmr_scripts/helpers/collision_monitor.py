@@ -9,6 +9,7 @@ from autoware_localization_msgs.msg import KinematicState
 from autoware_perception_msgs.msg import DetectedObjects
 from autoware_perception_msgs.msg import PredictedObjects
 from autoware_perception_msgs.msg import TrackedObjects
+from helper_shutdown import is_expected_shutdown_error
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -145,8 +146,11 @@ def main():
     node = CollisionMonitor()
     try:
         rclpy.spin(node)
-    except (KeyboardInterrupt, ExternalShutdownException, RCLError):
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except RCLError as exc:
+        if not is_expected_shutdown_error(exc):
+            raise
     finally:
         node.destroy_node()
         if rclpy.ok():

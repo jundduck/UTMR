@@ -2,6 +2,7 @@
 import rclpy
 from rclpy._rclpy_pybind11 import RCLError
 from rclpy.executors import ExternalShutdownException
+from helper_shutdown import is_expected_shutdown_error
 from rclpy.node import Node
 from rclpy.qos import QoSHistoryPolicy
 from rclpy.qos import QoSProfile
@@ -39,8 +40,11 @@ def main():
     node = PointCloudRelay()
     try:
         rclpy.spin(node)
-    except (KeyboardInterrupt, ExternalShutdownException, RCLError):
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except RCLError as exc:
+        if not is_expected_shutdown_error(exc):
+            raise
     finally:
         node.destroy_node()
         if rclpy.ok():

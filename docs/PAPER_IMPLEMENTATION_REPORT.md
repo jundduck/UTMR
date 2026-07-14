@@ -375,7 +375,7 @@ utmr fine_score_coverage_pct  100.0
 | Rank | Margin | Max coarse drop | Top-N | Score | Delta vs baseline | Rerank accepted |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | baseline | - | - | - | 0.8638675087 | +0.0000000000 | 0.0% |
-| 1 | 0.15 | 0.5 | 8 | 0.8720460220 | +0.0081785132 | 9.5% |
+| 1 | 0.15 | 0.5 | 8 | 0.8720460220 | +0.0081785133 | 9.5% |
 | 2 | 0.10 | 0.5 | 8 | 0.8709648289 | +0.0070973202 | 17.4% |
 | 3 | 0.20 | 0.5 | 8 | 0.8695653544 | +0.0056978457 | 7.3% |
 | 4 | 0.10 | 0.5 | 16 | 0.8681040503 | +0.0042365416 | 14.0% |
@@ -418,16 +418,20 @@ UTMR_MAX_COARSE_DROP=0.5
 
 ## 6. AWSIM/Autoware 구현 상태
 
-AWSIM live batch도 실행했습니다. 현재 결과는 closed-loop 성능 비교라기보다
+AWSIM live path도 실행했습니다. 현재 결과는 closed-loop 성능 비교라기보다
 AWSIM + Autoware + UTMR planner + reducer가 한 번에 도는지 확인한 live
-integration smoke입니다. Sample route arrival이 잡히지 않아 모든 variant가
-timeout으로 끝났기 때문입니다.
+integration smoke입니다. Sample route arrival이 아직 잡히지 않아 route
+success가 `0%`이기 때문입니다.
 
 | 코드 | 역할 |
 | --- | --- |
 | `autoware/utmr_scripts/helpers/utmr_planner_node.py` | UTMR trajectory를 `/planning/trajectory`로 publish |
+| `autoware/utmr_scripts/helpers/route_publisher.py` | synthetic route를 `/planning/mission_planning/route`로 publish |
+| `autoware/utmr_scripts/helpers/drive_gear_injector.py` | gear/turn/hazard/control/gate/heartbeat command를 publish |
+| `autoware/utmr_scripts/helpers/static_tf_injector.py` | AWSIM demo frame mismatch 완화를 위해 static/dynamic TF publish |
 | `autoware/utmr_scripts/helpers/collision_monitor.py` | object topic 기반 collision bridge |
 | `autoware/utmr_scripts/helpers/episode_metric_monitor.py` | route, speed, distance, collision metric CSV 작성 |
+| `autoware/utmr_scripts/helpers/helper_shutdown.py` | 정상 shutdown 중 발생하는 ROS context error만 제한적으로 suppress |
 | `experiments/utmr/awsim_supervisor.py` | episode 단위 실행 supervisor |
 | `experiments/utmr/awsim_batch_runner.py` | variant batch 실행 |
 | `experiments/utmr/scenarios/awsim_shinjuku_sample.json` | AWSIM sample scenario |
@@ -436,41 +440,60 @@ timeout으로 끝났기 때문입니다.
 
 - ROS helper node가 정상 shutdown 중 남기던 `ExternalShutdownException`,
   `RCLError` trace를 정상 종료로 처리했습니다.
-- episode CSV가 비어 있으면 supervisor가 step log 기반 fallback row를 씁니다.
-- Autoware launch가 남기는 orphan process를 root-specific pattern으로 정리합니다.
-- `paper_experiments.py`가 AWSIM `coarse` method_variant의 baseline latency를
-  runtime table에 반영하도록 alias를 보강했습니다.
+- episode CSV가 비어 있으면 supervisor가 fallback row를 쓰되,
+  `metric_source=fallback`으로 표시합니다.
+- `paper_experiments.py`는 closed-loop table에서 fallback row를 제외합니다.
+- helper cleanup은 기록된 PID와 helper script path만 대상으로 하도록 제한했습니다.
+- route publisher로 `/planning/mission_planning/route has not received`와
+  `waiting for route msg` 경고를 제거했습니다.
+- drive injector로 command gate warmup 경고를 줄였습니다.
+- static/dynamic TF injector로 `tamagawa/imu_link`, `velodyne_top` transform
+  경고를 크게 줄였습니다.
 
-최신 live run:
+최신 live smoke:
 
 ```text
-experiments/utmr/results/awsim_live_batch_metric_20260714_092655
+experiments/utmr/results/awsim_dynamic_tf_smoke_20260714_101654
 ```
 
-| Method | Episodes | Collision | Success | Mean speed | Driving score |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| WoTE | 1 | 0% | 0% | 28.8 km/h | 0.0 |
-| WoTE + UTMR (Ours) | 1 | 0% | 0% | 28.8 km/h | 0.0 |
-| WoTE + Uniform Fine | 1 | 0% | 0% | 28.8 km/h | 0.0 |
-| UTMR (fine dt only) | 1 | 0% | 0% | 28.8 km/h | 0.0 |
-| UTMR (short horizon only) | 1 | 0% | 0% | 28.8 km/h | 0.0 |
+| 항목 | 결과 |
+| --- | --- |
+| Variant | `utmr` |
+| Timeout | `75 s` |
+| Planner step rows | `693` |
+| Episode metric | observed row |
+| Collision | `False` |
+| Success | `False` |
+| Timeout flag | `True` |
+| Distance | `nan` |
+| Mean speed | `nan` |
+| Driving score | `0.0` |
 
-Runtime:
+최신 warning count:
 
-| Method | Trigger rate | Mean latency | P99 latency |
-| --- | ---: | ---: | ---: |
-| WoTE (coarse) | 0% | 6.49 ms | 20.93 ms |
-| WoTE + UTMR (Full) | 100% | 13.46 ms | 34.74 ms |
-| WoTE + Uniform Fine | 100% | 13.93 ms | 40.03 ms |
+| Pattern | Count |
+| --- | ---: |
+| `mission_planning/route has not received` | 0 |
+| `waiting for route msg` | 0 |
+| `GearCommand` | 2 |
+| `TurnIndicatorsCommand` | 3 |
+| `HazardLightsCommand` | 3 |
+| `Emergency!` | 9 |
+| `heartbeat is timeout` | 1 |
+| `Please publish TF base_link to tamagawa/imu_link` | 3 |
+| `Please publish TF velodyne_top to base_link` | 1 |
+| `routing/state` | 11 |
+| `/adapi/container node is duplicated` | 9 |
 
 해석:
 
-- live batch는 5개 variant 모두 실행됐고, merged step log `1125` rows와
-  episode CSV `5` rows를 만들었습니다.
-- helper tracebacks, leftover AWSIM/Autoware/UTMR processes, UTMR symlinks 모두
+- live smoke는 observed metric row와 planner step log `693` rows를 만들었습니다.
+- helper tracebacks, leftover AWSIM/Autoware/UTMR processes, UTMR symlinks는
   최종 확인 기준 `0`입니다.
-- 하지만 route success가 모든 variant에서 `0%`라서, 논문용 AWSIM 성능 표로는
-  아직 부족합니다.
+- route-missing/waiting 문제는 해결됐습니다.
+- command gate와 TF 문제는 줄었지만 장기 실행 중 일부 남습니다.
+- 하지만 route success가 아직 `0%`이고 QA 기준으로도 TF/topic/MRM 진단이
+  남아 있어서, 논문용 AWSIM 성능 표로는 아직 부족합니다.
 
 남은 작업:
 

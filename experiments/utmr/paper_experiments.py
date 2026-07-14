@@ -466,15 +466,26 @@ def reduce_experiments(steps: List[Dict[str, Any]], episodes: List[Dict[str, Any
             selections.append(select_variant(row, variant, params))
     write_csv(raw / "step_selections.csv", selections)
 
-    summary: Dict[str, Any] = {"params": asdict(params), "num_steps": len(steps)}
-    summary["main_closed_loop"] = reduce_episode_table(episodes, tables)
-    summary["runtime"] = reduce_runtime_table(selections, episodes, tables)
-    summary["ablation"] = reduce_ablation_tables(selections, episodes, tables)
+    observed_episodes = metric_monitor_episodes(episodes)
+    summary: Dict[str, Any] = {
+        "params": asdict(params),
+        "num_steps": len(steps),
+        "num_episodes": len(episodes),
+        "num_observed_episodes": len(observed_episodes),
+        "num_fallback_episodes": len(episodes) - len(observed_episodes),
+    }
+    summary["main_closed_loop"] = reduce_episode_table(observed_episodes, tables)
+    summary["runtime"] = reduce_runtime_table(selections, observed_episodes, tables)
+    summary["ablation"] = reduce_ablation_tables(selections, observed_episodes, tables)
     summary["speed_uncertainty"] = reduce_speed_uncertainty(selections, figures)
     summary["selection_bias"] = reduce_selection_bias(selections, figures)
     summary["qualitative"] = reduce_qualitative(steps, selections, figures, params)
     write_json(out_dir / "summary.json", summary)
     return summary
+
+
+def metric_monitor_episodes(episodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [row for row in episodes if str(row.get("metric_source", "observed")).lower() != "fallback"]
 
 
 def mean_std(values: Sequence[float]) -> Tuple[float, float]:
@@ -502,7 +513,21 @@ def to_float(value: Any, default: float = float("nan")) -> float:
 
 
 def reduce_episode_table(episodes: List[Dict[str, Any]], tables: Path) -> List[Dict[str, Any]]:
+    fieldnames = [
+        "method",
+        "episodes",
+        "collision_pct_mean",
+        "collision_pct_std",
+        "success_pct_mean",
+        "success_pct_std",
+        "mean_speed_kmh_mean",
+        "mean_speed_kmh_std",
+        "driving_score_mean",
+        "driving_score_std",
+    ]
     if not episodes:
+        write_csv(tables / "table_i_main_closed_loop.csv", [], fieldnames)
+        write_markdown(tables / "table_i_main_closed_loop.md", [], fieldnames)
         return []
     grouped = group_by(episodes, "method")
     rows = []
@@ -531,18 +556,6 @@ def reduce_episode_table(episodes: List[Dict[str, Any]], tables: Path) -> List[D
         )
     order = ["VAD", "WoTE", "WoTE + UTMR (Ours)", "WoTE + Uniform Fine"]
     rows.sort(key=lambda row: order.index(row["method"]) if row["method"] in order else len(order))
-    fieldnames = [
-        "method",
-        "episodes",
-        "collision_pct_mean",
-        "collision_pct_std",
-        "success_pct_mean",
-        "success_pct_std",
-        "mean_speed_kmh_mean",
-        "mean_speed_kmh_std",
-        "driving_score_mean",
-        "driving_score_std",
-    ]
     write_csv(tables / "table_i_main_closed_loop.csv", rows, fieldnames)
     write_markdown(tables / "table_i_main_closed_loop.md", rows, fieldnames)
     return rows
@@ -640,6 +653,7 @@ def reduce_ablation_tables(selections: List[Dict[str, Any]], episodes: List[Dict
     write_csv(tables / "table_iii_ablation_step_proxy.csv", step_rows, step_fields)
     write_markdown(tables / "table_iii_ablation_step_proxy.md", step_rows, step_fields)
 
+    closed_loop_fields = ["variant", "episodes", "collision_pct", "success_pct", "mean_speed_kmh"]
     closed_loop_rows = []
     if episodes:
         wanted = {
@@ -663,9 +677,8 @@ def reduce_ablation_tables(selections: List[Dict[str, Any]], episodes: List[Dict
                     "mean_speed_kmh": speed_mean,
                 }
             )
-        fields = ["variant", "episodes", "collision_pct", "success_pct", "mean_speed_kmh"]
-        write_csv(tables / "table_iii_ablation_closed_loop.csv", closed_loop_rows, fields)
-        write_markdown(tables / "table_iii_ablation_closed_loop.md", closed_loop_rows, fields)
+    write_csv(tables / "table_iii_ablation_closed_loop.csv", closed_loop_rows, closed_loop_fields)
+    write_markdown(tables / "table_iii_ablation_closed_loop.md", closed_loop_rows, closed_loop_fields)
     return {"step_proxy": step_rows, "closed_loop": closed_loop_rows}
 
 

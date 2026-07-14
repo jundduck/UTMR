@@ -2,6 +2,7 @@
 import rclpy
 from rclpy._rclpy_pybind11 import RCLError
 from autoware_vehicle_msgs.msg import Engage
+from helper_shutdown import is_expected_shutdown_error
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -30,8 +31,11 @@ def main():
     node = EngageInjector()
     try:
         rclpy.spin(node)
-    except (KeyboardInterrupt, ExternalShutdownException, RCLError):
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except RCLError as exc:
+        if not is_expected_shutdown_error(exc):
+            raise
     finally:
         node.destroy_node()
         if rclpy.ok():
