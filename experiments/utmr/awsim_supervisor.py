@@ -157,11 +157,15 @@ def command_env(root: Path, args: argparse.Namespace, step_log: Path) -> Dict[st
             "UTMR_METHOD": METHOD_NAMES[args.variant],
             "UTMR_VARIANT": args.variant,
             "UTMR_START_METRIC_MONITOR": "0" if args.skip_monitor else "1",
+            "UTMR_START_ROUTE_PUBLISHER": env.get("UTMR_START_ROUTE_PUBLISHER", "0"),
             "UTMR_COLLISION_TOPIC": env.get("UTMR_COLLISION_TOPIC", "/utmr/collision"),
             "UTMR_COLLISION_OUTPUT_TOPIC": env.get("UTMR_COLLISION_OUTPUT_TOPIC", "/utmr/collision"),
             "RVIZ": env.get("RVIZ", "false"),
             "PERCEPTION": env.get("PERCEPTION", "false"),
             "PLANNING": env.get("PLANNING", "false"),
+            "UTMR_DISABLE_AUTOMATIC_POSE_INITIALIZER": env.get(
+                "UTMR_DISABLE_AUTOMATIC_POSE_INITIALIZER", "1"
+            ),
             "UTMR_K": str(args.k),
             "UTMR_COARSE_HORIZON_S": str(args.coarse_horizon_s),
             "UTMR_COARSE_DT_S": str(args.coarse_dt_s),

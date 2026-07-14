@@ -83,6 +83,20 @@ experiments/utmr/run_awsim_batch.sh \
   --timeout-s 120
 ```
 
+Current AWSIM defaults:
+
+- `run_utmr_demo.sh` waits on Autoware's pose-initializer stop-check topic
+  `/sensing/vehicle_velocity_converter/twist_with_covariance` before each
+  localization initialize attempt.
+- AWSIM supervisor disables the automatic pose initializer by default so the
+  scripted DIRECT initialize call can own startup.
+- `UTMR_START_ROUTE_PUBLISHER=0` by default for AWSIM live runs. Enable it only
+  when you intentionally want the synthetic route publisher.
+- `UTMR_SET_PLANNING_WAYPOINT_ROUTE=0` and
+  `UTMR_CLEAR_PLANNING_ROUTE_BEFORE_SET=0` by default, because the ADAPI route
+  service is enough for the current smoke and the planning services can consume
+  the full ROS CLI timeout in this build.
+
 `setup_wote_runtime.sh` installs the UTMR-local Python packages needed to import WoTE/NAVSIM without creating a virtualenv or symlinks. `source_wote_runtime.sh` exports `PYTHONPATH`, `NAVSIM_DEVKIT_ROOT`, `OPENSCENE_DATA_ROOT`, and the matching map/exp roots for the current shell.
 
 `prepare_wote_assets.sh` clones or updates `liyingyanUCAS/WoTE`, downloads the released WoTE checkpoint, ResNet-34 backbone, K=256 anchors, K=256 PDM-score cache, then derives matching K=64 anchors and a K=64 PDM-score cache from the released K=256 files.

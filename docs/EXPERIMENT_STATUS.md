@@ -268,7 +268,7 @@ Finding:
 
 ## AWSIM/Autoware Status
 
-Status: live integration smoke executed; route-success scenario still pending.
+Status: live closed-loop smoke succeeded on the Shinjuku sample scenario.
 
 Implemented pieces:
 
@@ -277,10 +277,23 @@ Implemented pieces:
   `nav_msgs/Odometry` or `autoware_localization_msgs/KinematicState` through
   `UTMR_KINEMATIC_MSG_TYPE`; current AWSIM publishes `Odometry` on
   `/localization/kinematic_state`.
-- AWSIM object topic adapter for predicted/tracked/detected objects.
+- Autoware pose-initializer stopped-condition alignment:
+  - topic: `/sensing/vehicle_velocity_converter/twist_with_covariance`
+  - type: `geometry_msgs/TwistWithCovarianceStamped`
+  - threshold: `0.001 m/s`
+  - hold: `3.0 s`
+- Localization retry now performs a fresh stationary wait before each retry.
+- AWSIM supervisor disables Autoware automatic pose initializer by default so
+  manual DIRECT localization initialization can complete predictably.
+- Stale route clear is best-effort through `/api/routing/clear_route`.
+- Synthetic `route_publisher.py` is available but off by default for AWSIM live
+  runs, because publishing an empty synthetic route polluted
+  `/planning/mission_planning/route`.
+- `/planning/clear_route` and `/planning/set_waypoint_route` are optional and
+  off by default because this AWSIM/Autoware combination can spend the full ROS
+  CLI timeout on those services while ADAPI route setup is enough for the smoke.
 - Collision monitor bridge.
 - Episode metric monitor.
-- Synthetic route publisher for `/planning/mission_planning/route`.
 - Drive/command gate injector for gear, turn, hazard, control, gate mode, and
   external heartbeat topics.
 - Static/dynamic TF injector for AWSIM demo frame mismatch around
@@ -297,88 +310,70 @@ Implemented pieces:
   process killing was removed.
 - Episode reducer ignores supervisor fallback rows for closed-loop tables so
   missing observed metrics do not look like real driving results.
-- `run_utmr_demo.sh` retries Autoware service calls. Localization initialization
-  is treated as complete only when the service response contains
-  `success=True`; `success=False` responses such as `The vehicle is not stopped.`
-  are retried.
-- Autonomous operation and vehicle-gate unstop are skipped unless localization
-  is ready and the route service either succeeds or reports that the route is
-  already set.
 - If readiness is incomplete, `run_utmr_demo.sh` prints `UTMR_READY=0` and exits
   with code `2` instead of printing a successful `done` line.
-- Operation mode and vehicle gate service calls now run before the optional
-  `/planning/set_waypoint_route` fallback, so a slow/stale waypoint service no
-  longer blocks command-gate setup.
 
-Latest AWSIM diagnosis runs:
+Latest AWSIM runs:
 
 ```text
-experiments/utmr/results/awsim_odometry_adapter_smoke_20260714_105709
-experiments/utmr/results/awsim_service_order_smoke_20260714_110036
-experiments/utmr/results/awsim_localization_strict_smoke_20260714_110423
+experiments/utmr/results/awsim_route_clear_fastpath_20260714_134344
+experiments/utmr/results/awsim_live_batch_fastpath_20260714_134703
+experiments/utmr/results/awsim_post_retry_wait_smoke_20260714_140249
 ```
 
-Run configuration:
+Main live batch configuration:
 
 ```text
-variant: utmr
-episodes per run: 1
+variants: baseline, utmr, uniform_fine, fine_dt_only, short_horizon_only
+episodes per variant: 1
 scenario: experiments/utmr/scenarios/awsim_shinjuku_sample.json
-topic probe finding: /localization/kinematic_state publisher type is nav_msgs/Odometry
-service-order finding: operation mode and vehicle gate services are reached
-strict-localization finding: failed localization responses are now retried
+timeout: 120 s
+merged steps: 4631
+observed episode rows: 5
+fallback episode rows: 0
 ```
 
 Closed-loop episode result:
 
-| Method | Collision | Success | Timeout | Distance | Mean speed | Driving score | Metric source |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| WoTE + UTMR (Ours), Odometry adapter smoke | False | False | True | 0.0 | 0.0 | 0.0 | observed |
-| WoTE + UTMR (Ours), strict localization smoke | False | False | True | `nan` | `nan` | 0.0 | observed |
+| Method | Variant | Collision | Success | Timeout | Distance m | Mean speed km/h | Driving score |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| WoTE | baseline | False | True | False | 150.852 | 5.963 | 76.242 |
+| WoTE + UTMR (Ours) | utmr | False | True | False | 148.635 | 6.096 | 76.270 |
+| WoTE + Uniform Fine | uniform_fine | False | True | False | 146.422 | 5.478 | 76.141 |
+| UTMR (fine dt only) | fine_dt_only | False | True | False | 195.204 | 8.919 | 76.858 |
+| UTMR (short horizon only) | short_horizon_only | False | True | False | 146.356 | 5.784 | 76.205 |
 
-Latest warning counts:
+Generated live outputs:
 
-| Pattern | Count |
-| --- | ---: |
-| `mission_planning/route has not received` | 0 |
-| `waiting for route msg` | 0 |
-| `GearCommand` | 2 |
-| `TurnIndicatorsCommand` | 3 |
-| `HazardLightsCommand` | 3 |
-| `Emergency!` | 9 |
-| `heartbeat is timeout` | 1 |
-| `Please publish TF base_link to tamagawa/imu_link` | 3 |
-| `Please publish TF velodyne_top to base_link` | 1 |
-| `routing/state` | 11 |
-| `/adapi/container node is duplicated` | 9 |
+```text
+raw/awsim_batch_episodes.csv
+raw/awsim_batch_steps.jsonl
+tables/table_i_main_closed_loop.md
+tables/table_ii_runtime.md
+tables/table_iii_ablation_closed_loop.md
+figures/fig3_speed_uncertainty.png
+figures/fig4_selection_bias.png
+figures/fig5_score_landscape.png
+```
 
 Interpretation:
 
-- The AWSIM + Autoware + UTMR planner + reducer path runs end-to-end and now
-  produces an observed metric row, not just a supervisor fallback row.
-- Runtime probing showed the previous helper subscription type was wrong for
-  this Autoware/AWSIM build. After switching the default helper input to
-  `Odometry`, the metric monitor and planner can receive live localization.
-- Route-missing and route-waiting messages were removed by the route publisher.
-- Command gate and TF errors were reduced by the drive injector and dynamic TF
-  injector, but are not fully gone in longer runs.
-- The service-order change makes operation mode and vehicle gate setup reachable
-  before the optional waypoint-route service can consume the whole smoke window.
-- The current Shinjuku sample scenario is still not a useful performance
-  benchmark because route success remains `0%`, and localization initialization
-  can still fail with `The vehicle is not stopped.` depending on AWSIM state.
-- Treat AWSIM results as live integration smoke. The NAVSIM full results remain
-  the meaningful performance evidence.
+- The AWSIM + Autoware + UTMR planner + reducer path now runs end-to-end and
+  produces observed success rows for all five variants.
+- The previous `The vehicle is not stopped` blocker is mitigated by using the
+  same stop-check topic/threshold/duration as Autoware's pose initializer and
+  by retrying localization only after a fresh stopped check.
+- Route setup no longer depends on the synthetic route publisher or the slow
+  planning waypoint service.
+- This is still a live smoke result, not a statistically strong benchmark:
+  each variant has only one episode on one sample route.
 
 Still required for stronger live AWSIM:
 
-- Improve route initialization or scenario poses so route arrival is detected.
-- Reset or hold the AWSIM ego vehicle stopped before `/localization/initialize`
-  so initialization reliably returns `success=True`.
+- Repeat live batch with at least 5 episodes per variant.
+- Add more AWSIM scenarios/routes before treating the live table as robust.
 - Confirm real object/collision topics with `probe_live_topics.sh` when
   perception/object topics are enabled.
-- Repeat live batch with at least 5 episodes per variant once success is
-  meaningful.
 
 ## Commands Used
 

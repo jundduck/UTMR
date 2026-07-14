@@ -8,6 +8,7 @@ trap 'rm -rf "$TMP_ROOT"' EXIT
 FAKE_BIN="$TMP_ROOT/bin"
 mkdir -p "$FAKE_BIN"
 RESPONSE_DIR="$TMP_ROOT/responses"
+WAIT_LOG="$TMP_ROOT/wait.log"
 mkdir -p "$RESPONSE_DIR"
 
 cat >"$FAKE_BIN/ros2" <<'BASH'
@@ -17,6 +18,7 @@ set -euo pipefail
 if [[ "$1" == "service" && "$2" == "list" ]]; then
   cat <<'SERVICES'
 /localization/initialize
+/api/routing/clear_route
 /api/routing/set_route_points
 /system/operation_mode/change_operation_mode
 /control/vehicle_cmd_gate/set_stop
@@ -43,6 +45,10 @@ if [[ "$1" == "service" && "$2" == "call" ]]; then
       else
         echo "status=ResponseStatus(success=True, code=0, message='')"
       fi
+      ;;
+    /api/routing/clear_route|/planning/clear_route)
+      echo "response:"
+      echo "status=ResponseStatus(success=True, code=0, message='')"
       ;;
     /system/operation_mode/change_operation_mode)
       echo "response:"
@@ -73,12 +79,24 @@ exit 2
 BASH
 chmod +x "$FAKE_BIN/ros2"
 
+FAKE_WAIT="$TMP_ROOT/wait_for_stationary.sh"
+cat >"$FAKE_WAIT" <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'WAIT_STATIONARY\n' >>"$UTMR_TEST_CALL_LOG"
+printf 'wait\n' >>"$UTMR_TEST_WAIT_LOG"
+exit "${UTMR_TEST_WAIT_STATUS:-0}"
+BASH
+chmod +x "$FAKE_WAIT"
+
 export PATH="$FAKE_BIN:$PATH"
 export UTMR_SERVICE_LIST_TIMEOUT_S=2
 export UTMR_SERVICE_CALL_TIMEOUT_S=2
 export UTMR_SERVICE_RETRY_COUNT=2
 export UTMR_SERVICE_RETRY_SLEEP_S=0
 export UTMR_SERVICE_RESPONSE_DIR="$RESPONSE_DIR"
+export UTMR_STATIONARY_WAIT_HELPER="$FAKE_WAIT"
+export UTMR_TEST_WAIT_LOG="$WAIT_LOG"
 
 source "$ROOT/autoware/utmr_scripts/service_calls.sh"
 source "$ROOT/autoware/utmr_scripts/service_readiness.sh"
@@ -103,13 +121,36 @@ if [[ "$localization_ready" != "0" ]]; then
   exit 1
 fi
 
-if [[ "$route_ready" != "1" ]]; then
-  echo "expected route already-set response to be accepted" >&2
+if [[ "$route_ready" != "0" ]]; then
+  echo "expected localization failure to skip route setup" >&2
   exit 1
 fi
 
-if grep -Eq '/system/operation_mode/change_operation_mode|/control/vehicle_cmd_gate/set_stop' "$localization_failure_log"; then
-  echo "autonomous/gate service was called despite failed localization" >&2
+if [[ "$(sed -n '1p' "$localization_failure_log")" != "WAIT_STATIONARY" ]]; then
+  echo "expected stationary wait before localization initialize" >&2
+  exit 1
+fi
+
+if grep -Eq '/api/routing/set_route_points|/system/operation_mode/change_operation_mode|/control/vehicle_cmd_gate/set_stop' "$localization_failure_log"; then
+  echo "downstream service was called despite failed localization" >&2
+  exit 1
+fi
+
+UTMR_TEST_WAIT_STATUS=1 \
+UTMR_TEST_LOCALIZATION_SUCCESS=1 \
+UTMR_TEST_ROUTE_ALREADY_SET=0 \
+UTMR_TEST_OPERATION_SUCCESS=1 \
+  run_readiness_case stationary_failure
+stationary_failure_log="$READINESS_CASE_LOG"
+unset UTMR_TEST_WAIT_STATUS
+
+if [[ "$stationary_ready" != "0" || "$localization_ready" != "0" || "$route_ready" != "0" ]]; then
+  echo "expected stationary failure to skip localization and route setup" >&2
+  exit 1
+fi
+
+if grep -Eq '/localization/initialize|/api/routing/set_route_points|/system/operation_mode/change_operation_mode|/control/vehicle_cmd_gate/set_stop' "$stationary_failure_log"; then
+  echo "service was called despite failed stationary precondition" >&2
   exit 1
 fi
 
@@ -147,6 +188,20 @@ fi
 
 if ! grep -qx '/control/vehicle_cmd_gate/set_stop' "$success_log"; then
   echo "expected gate service to be called after operation success" >&2
+  exit 1
+fi
+
+expected_success_calls="$TMP_ROOT/expected_success.calls.log"
+cat >"$expected_success_calls" <<'EOF'
+WAIT_STATIONARY
+/localization/initialize
+/api/routing/clear_route
+/api/routing/set_route_points
+/system/operation_mode/change_operation_mode
+/control/vehicle_cmd_gate/set_stop
+EOF
+if ! diff -u "$expected_success_calls" "$success_log"; then
+  echo "expected successful readiness sequence to clear stale routes before route set" >&2
   exit 1
 fi
 

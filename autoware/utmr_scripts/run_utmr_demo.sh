@@ -33,7 +33,7 @@ UTMR_COLLISION_TOPIC="${UTMR_COLLISION_TOPIC:-/utmr/collision}"
 UTMR_COLLISION_OUTPUT_TOPIC="${UTMR_COLLISION_OUTPUT_TOPIC:-/utmr/collision}"
 UTMR_SERVICE_INITIAL_WAIT_S="${UTMR_SERVICE_INITIAL_WAIT_S:-3}"
 UTMR_SERVICE_LIST_TIMEOUT_S="${UTMR_SERVICE_LIST_TIMEOUT_S:-3}"
-UTMR_SERVICE_CALL_TIMEOUT_S="${UTMR_SERVICE_CALL_TIMEOUT_S:-6}"
+UTMR_SERVICE_CALL_TIMEOUT_S="${UTMR_SERVICE_CALL_TIMEOUT_S:-30}"
 UTMR_SERVICE_RETRY_COUNT="${UTMR_SERVICE_RETRY_COUNT:-4}"
 UTMR_SERVICE_RETRY_SLEEP_S="${UTMR_SERVICE_RETRY_SLEEP_S:-2}"
 UTMR_SERVICE_RESPONSE_DIR="${UTMR_SERVICE_RESPONSE_DIR:-${TMPDIR:-/tmp}}"
@@ -110,28 +110,37 @@ start_helper mrm_normalizer "$HELPER_DIR/mrm_normalizer.py" "$(helper_log utmr-m
 start_helper engage_injector "$HELPER_DIR/engage_injector.py" "$(helper_log utmr-engage-injector.log)"
 start_helper drive_gear_injector "$HELPER_DIR/drive_gear_injector.py" "$(helper_log utmr-drive-gear-injector.log)"
 
-if [[ "${UTMR_START_ROUTE_PUBLISHER:-1}" != "0" ]]; then
-  start_helper route_publisher "$HELPER_DIR/route_publisher.py" "$(helper_log utmr-route-publisher.log)"
-fi
-
-if [[ "${UTMR_START_COLLISION_MONITOR:-1}" != "0" ]]; then
-  start_helper collision_monitor "$HELPER_DIR/collision_monitor.py" "$(helper_log utmr-collision-monitor.log)"
-fi
-
-if [[ "${UTMR_START_METRIC_MONITOR:-1}" != "0" && -n "${UTMR_EPISODE_CSV:-}" ]]; then
-  start_helper episode_metric_monitor "$HELPER_DIR/episode_metric_monitor.py" "$(helper_log utmr-episode-metric-monitor.log)"
-fi
-
-mkdir -p "$(dirname "$UTMR_STEP_LOG")"
-start_helper utmr_planner "$HELPER_DIR/utmr_planner_node.py" "$(helper_log utmr-planner-node.log)"
-
 echo "waiting for Autoware services..."
 sleep "$UTMR_SERVICE_INITIAL_WAIT_S"
 
 INIT_REQUEST="{method: 1, pose_with_covariance: [{header: {frame_id: map}, pose: {pose: {position: {x: $UTMR_INIT_X, y: $UTMR_INIT_Y, z: $UTMR_INIT_Z}, orientation: {x: $UTMR_INIT_QX, y: $UTMR_INIT_QY, z: $UTMR_INIT_QZ, w: $UTMR_INIT_QW}}, covariance: $UTMR_INIT_COVARIANCE}}]}"
 ROUTE_REQUEST="{header: {frame_id: map}, option: {allow_goal_modification: true}, goal: {position: {x: $UTMR_GOAL_X, y: $UTMR_GOAL_Y, z: $UTMR_GOAL_Z}, orientation: {x: $UTMR_GOAL_QX, y: $UTMR_GOAL_QY, z: $UTMR_GOAL_QZ, w: $UTMR_GOAL_QW}}, waypoints: []}"
 WAYPOINT_ROUTE_REQUEST="{header: {frame_id: map}, goal_pose: {position: {x: $UTMR_GOAL_X, y: $UTMR_GOAL_Y, z: $UTMR_GOAL_Z}, orientation: {x: $UTMR_GOAL_QX, y: $UTMR_GOAL_QY, z: $UTMR_GOAL_QZ, w: $UTMR_GOAL_QW}}, waypoints: [], uuid: {uuid: $UTMR_ROUTE_UUID_BYTES}, allow_modification: true}"
-utmr_run_readiness_sequence "$INIT_REQUEST" "$ROUTE_REQUEST" "$WAYPOINT_ROUTE_REQUEST"
+utmr_run_localization_and_route "$INIT_REQUEST" "$ROUTE_REQUEST"
+
+if [[ "$localization_ready" == "1" && "$route_ready" == "1" ]]; then
+  if [[ "${UTMR_START_ROUTE_PUBLISHER:-0}" != "0" ]]; then
+    start_helper route_publisher "$HELPER_DIR/route_publisher.py" "$(helper_log utmr-route-publisher.log)"
+  fi
+
+  if [[ "${UTMR_START_COLLISION_MONITOR:-1}" != "0" ]]; then
+    start_helper collision_monitor "$HELPER_DIR/collision_monitor.py" "$(helper_log utmr-collision-monitor.log)"
+  fi
+
+  if [[ "${UTMR_START_METRIC_MONITOR:-1}" != "0" && -n "${UTMR_EPISODE_CSV:-}" ]]; then
+    start_helper episode_metric_monitor "$HELPER_DIR/episode_metric_monitor.py" "$(helper_log utmr-episode-metric-monitor.log)"
+  fi
+
+  mkdir -p "$(dirname "$UTMR_STEP_LOG")"
+  start_helper utmr_planner "$HELPER_DIR/utmr_planner_node.py" "$(helper_log utmr-planner-node.log)"
+
+  sleep "${UTMR_POST_ROUTE_PLANNER_WARMUP_S:-2}"
+fi
+
+utmr_run_operation_and_gate
+if [[ "${UTMR_SET_PLANNING_WAYPOINT_ROUTE:-0}" != "0" ]]; then
+  utmr_run_waypoint_route_if_requested "$WAYPOINT_ROUTE_REQUEST"
+fi
 
 if utmr_readiness_success; then
   echo "done. UTMR_READY=1 planner mode=$UTMR_MODE, step log=$UTMR_STEP_LOG"

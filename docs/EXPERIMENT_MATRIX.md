@@ -31,12 +31,15 @@
 | 16 | K256 guarded safety full | K64 guard의 K256 전이성 확인 | PDM score 표 | score `0.8827077445`, baseline보다 `-0.0006072906` | 개선 아님 |
 | 17 | K64 guard sensitivity 1000 | guard parameter 근거 확보 | PDM score 표 + summary TSV | best `margin=0.15`, `drop=0.5`, `topN=8` | 근거 확보 |
 | 18 | AWSIM/Autoware helper 구현 | closed-loop/live 실험 준비 | ROS/helper 코드 | planner publisher, collision monitor, metric monitor, batch runner 구현 | 구현 완료 |
-| 19 | AWSIM/Autoware live batch smoke | closed-loop/live pipeline 검증 | episode CSV + runtime 표 | 5 variants × 1 episode 실행, route success `0%`, collision `0%`, merged steps `1125` | smoke 완료, benchmark 아님 |
-| 20 | AWSIM route/control smoke | route와 command gate 병목 진단 | 로그 카운트 + CSV | route missing/waiting은 `0`; command/heartbeat 경고는 감소했지만 일부 남음 | smoke 완료, benchmark 아님 |
-| 21 | AWSIM dynamic TF smoke | sensor/localization TF mismatch 완화 | 로그 카운트 + CSV | observed metric row, `693` planner steps. route success는 아직 `0%` | smoke evidence 확보, benchmark 아님 |
-| 22 | AWSIM Odometry/service retry smoke | live helper가 실제 localization topic과 service 응답을 받는지 검증 | runtime topic probe + CSV | `/localization/kinematic_state` publisher가 `nav_msgs/Odometry`임을 확인. helper adapter 추가 후 metric 숫자 기록 가능. localization `success=False` 응답은 재시도 | blocker 일부 해결 |
+| 19 | AWSIM/Autoware live batch smoke | closed-loop/live pipeline 검증 | episode CSV + runtime 표 | 초기 5 variants × 1 episode 실행, route success `0%`, collision `0%`, merged steps `1125` | 초기 smoke |
+| 20 | AWSIM route/control smoke | route와 command gate 병목 진단 | 로그 카운트 + CSV | route missing/waiting은 `0`; command/heartbeat 경고는 감소했지만 일부 남음 | 진단 완료 |
+| 21 | AWSIM dynamic TF smoke | sensor/localization TF mismatch 완화 | 로그 카운트 + CSV | observed metric row, `693` planner steps. route success는 아직 `0%` | smoke evidence 확보 |
+| 22 | AWSIM Odometry/service retry smoke | live helper가 실제 localization topic과 service 응답을 받는지 검증 | runtime topic probe + CSV | `/localization/kinematic_state` publisher가 `nav_msgs/Odometry`; helper adapter 후 metric 숫자 기록 가능; localization `success=False`는 재시도 | blocker 일부 해결 |
 | 23 | K256 retune 300 | K256 별도 guard 후보 탐색 | PDM score 표 | baseline `0.9022969937`, best 후보 `0.9034554556`; 보수 후보 `m0.20/drop0.2/topN4`도 `0.9033675968` | 후보 확보 |
 | 24 | K256 retune 1000 | K256 보수 후보 확대 검증 | PDM score 표 + step summary | baseline `0.8852103916`, `m0.20/drop0.2/topN4` UTMR `0.8900427692`, accepted `3.0%` | subset 개선 확인 |
+| 25 | AWSIM stopped-condition fix | localization init 실패 원인 제거 | Autoware source trace + live smoke | stop-check topic을 `/sensing/vehicle_velocity_converter/twist_with_covariance`, threshold `0.001m/s`, hold `3s`로 맞춤 | 구현/검증 완료 |
+| 26 | AWSIM route fastpath smoke | stale route/empty route publisher 제거 | episode CSV + log check | synthetic route publisher 기본 off, planning clear/waypoint 기본 off, `UTMR_READY=1`, success observed | smoke 성공 |
+| 27 | AWSIM live batch fastpath | 현재 live closed-loop 비교 | table_i/table_ii/table_iii + figures | 5 variants × 1 episode, all success, collision `0%`, merged steps `4631` | closed-loop smoke 성공 |
 
 ## 핵심 숫자
 
@@ -46,6 +49,7 @@
 | K64 1000 best sensitivity | 0.8638675087 | 0.8720460220 | +0.0081785133 | 현재 guard 설정 근거 |
 | K256 full | 0.8833150351 | 0.8827077445 | -0.0006072906 | K256은 별도 tuning 필요 |
 | K256 retune 1000 | 0.8852103916 | 0.8900427692 | +0.0048323775 | 보수 guard는 K256 subset에서도 개선 |
+| AWSIM live batch fastpath | 76.242342 | 76.269913 | +0.027571 | 1-episode smoke에서는 UTMR가 baseline보다 근소하게 높음 |
 
 ## 결과물 양식
 
@@ -57,11 +61,12 @@
 | speed-uncertainty | PNG + CSV | uncertainty figure |
 | selection bias | PNG + CSV | selection behavior figure |
 | score landscape | PNG + CSV | qualitative figure |
-| AWSIM episode metrics | CSV/표 | live integration table. 현재는 route success `0%`라 최종 benchmark가 아니라 smoke result |
+| AWSIM episode metrics | CSV/표 | live integration table. 현재는 `episodes=1`이라 통계 benchmark가 아니라 smoke result |
 
 ## 현재 결론
 
 1. 논문 설정인 `K=64`에서는 guarded safety UTMR가 full NAVSIM에서 baseline보다 높습니다.
 2. 같은 guard를 `K=256`에 그대로 적용하면 baseline보다 약간 낮지만, 별도 보수 guard(`margin=0.20`, `drop=0.2`, `topN=4`)는 1000-scene subset에서 baseline보다 높았습니다.
 3. K64 sensitivity는 현재 best 설정 `margin=0.15`, `drop=0.5`, `topN=8`을 뒷받침합니다.
-4. AWSIM/Autoware live path는 route/control/TF/Odometry smoke까지 돌았지만, route success가 잡히는 scenario를 맞춘 뒤 5+ episodes per variant로 다시 돌려야 최종 closed-loop benchmark가 됩니다.
+4. AWSIM/Autoware live path는 route/control/TF/Odometry/stopped-condition 문제를 지나 5개 variant 모두 observed success row를 만들었습니다.
+5. AWSIM 결과는 아직 `episodes=1` smoke이므로, 최종 closed-loop benchmark로 쓰려면 5+ episodes per variant 반복이 필요합니다.

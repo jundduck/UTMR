@@ -36,11 +36,13 @@
 | 16 | K256 guarded safety full | K64 guard의 K256 전이성 확인 | 표 | score `0.8827077445`, baseline보다 `-0.0006072906` | 개선 아님 |
 | 17 | K64 guard sensitivity 1000 | guard parameter 근거 확보 | 표 + TSV | best `margin=0.15`, `drop=0.5`, `topN=8` | 근거 확보 |
 | 18 | AWSIM/Autoware helper 구현 | live/closed-loop 실험 준비 | ROS 코드 | planner, object adapter, collision, metric monitor, batch runner 구현 | 구현 완료 |
-| 19 | AWSIM initial live batch | live pipeline 첫 end-to-end smoke | episode CSV + runtime 표 | 5 variants × 1 episode 실행, route success `0%` | smoke 완료, benchmark 아님 |
-| 20 | AWSIM route/control smoke | Autoware route와 command gate 진단 | 로그 카운트 + CSV | route-missing/waiting은 `0`; command/heartbeat 경고는 감소했지만 일부 남음 | smoke 완료, benchmark 아님 |
-| 21 | AWSIM dynamic TF smoke | sensor/localization TF mismatch 완화 | 로그 카운트 + CSV | `693` planner steps, observed metric row 생성. TF 경고는 크게 감소했지만 route success는 아직 `0%` | smoke evidence 확보, benchmark 아님 |
+| 19 | AWSIM initial live batch | live pipeline 첫 end-to-end smoke | episode CSV + runtime 표 | 초기 5 variants × 1 episode 실행, route success `0%` | 초기 smoke |
+| 20 | AWSIM route/control smoke | Autoware route와 command gate 진단 | 로그 카운트 + CSV | route-missing/waiting은 `0`; command/heartbeat 경고는 감소했지만 일부 남음 | 진단 완료 |
+| 21 | AWSIM dynamic TF smoke | sensor/localization TF mismatch 완화 | 로그 카운트 + CSV | `693` planner steps, observed metric row 생성. TF 경고 감소 | smoke evidence 확보 |
 | 22 | AWSIM Odometry/service retry smoke | 실제 live localization topic과 service timing 진단 | runtime topic probe + episode CSV | `/localization/kinematic_state` publisher가 `nav_msgs/Odometry`; helper adapter 후 metric 숫자 기록 가능; localization `success=False`는 재시도 | blocker 일부 해결 |
 | 23 | K256 retune 300/1000 | K256 별도 guard가 필요한지 확인 | PDM score 표 | 1000-scene에서 baseline `0.8852103916`, retuned UTMR `0.8900427692` | subset 개선 확인 |
+| 24 | AWSIM stopped-condition/route fastpath | live localization과 route setup 안정화 | 코드 + smoke CSV | stop-check topic/threshold를 Autoware와 맞추고 synthetic route publisher를 기본 off | 구현/검증 완료 |
+| 25 | AWSIM live batch fastpath | 현재 live closed-loop 비교 | episode CSV + Markdown tables + PNG figures | 5 variants × 1 episode, all success, collision `0%`, merged steps `4631` | closed-loop smoke 성공 |
 
 ## 핵심 결과 숫자
 
@@ -50,6 +52,7 @@
 | K64 1000 best sensitivity | 0.8638675087 | 0.8720460220 | +0.0081785133 | 현재 guard 설정의 근거 |
 | K256 full NAVSIM | 0.8833150351 | 0.8827077445 | -0.0006072906 | K256에는 별도 tuning 필요 |
 | K256 retune 1000 | 0.8852103916 | 0.8900427692 | +0.0048323775 | 보수 guard는 K256 subset에서도 개선 |
+| AWSIM live batch fastpath | 76.242342 | 76.269913 | +0.027571 | 1-episode smoke에서 UTMR가 baseline보다 근소하게 높음 |
 
 ## 결과물 양식
 
@@ -61,7 +64,7 @@
 | speed-uncertainty | PNG + CSV | figure 후보 |
 | selection bias | PNG + CSV | figure 후보 |
 | score landscape | PNG + CSV | qualitative figure 후보 |
-| AWSIM episode metrics | CSV/표 | live integration 상태. 현재는 route success `0%`라 최종 benchmark 아님 |
+| AWSIM episode metrics | CSV/표 | live integration 상태. 현재는 `episodes=1`이라 최종 benchmark가 아니라 smoke result |
 
 ## 지금 더 할 실험이 있나?
 
@@ -71,8 +74,8 @@
 
 | 우선순위 | 남은 일 | 왜 필요한가 | 현재 상태 |
 | ---: | --- | --- | --- |
-| 1 | AWSIM route success가 잡히는 scenario 재설정 | closed-loop/live benchmark 완성 | helper는 준비됐고 Odometry/service blocker 일부 해결. ego vehicle stop/reset과 route arrival가 남음 |
-| 2 | AWSIM 5+ episodes per variant 반복 | live table의 통계 신뢰도 확보 | 아직 route success가 0%라 반복 전 scenario부터 고쳐야 함 |
+| 1 | AWSIM 5+ episodes per variant 반복 | live table의 통계 신뢰도 확보 | 1-episode fastpath batch는 성공. 이제 반복 수를 늘리면 됨 |
+| 2 | AWSIM scenario 다양화 | closed-loop/live benchmark 일반화 | 현재는 Shinjuku sample 1개 route 기준 |
 | 3 | K256 retuned full run | 원본 WoTE K256에서도 개선 여부 확인 | 1000-scene retuned guard는 개선 확인. full은 optional robustness check |
 | 4 | 논문용 표/그림 polish | 제출용 결과 정리 | NAVSIM 표/그림 재료는 이미 생성됨 |
 
@@ -81,4 +84,4 @@
 - NAVSIM/WoTE 논문 구현은 성공.
 - K64 main result는 성공.
 - K256 full에서 같은 guard는 낮았지만, 별도 보수 guard는 1000-scene subset에서 개선.
-- AWSIM live path는 integration smoke evidence까지 확보했고, Odometry topic mismatch, service-order, localization `success=False` retry 문제를 일부 해결. 최종 closed-loop benchmark는 ego stop/reset과 route success scenario를 더 맞춰야 함.
+- AWSIM live path는 stopped-condition, service-order, route fastpath를 지나 5개 variant 모두 observed success row를 만들었음. 최종 closed-loop benchmark는 반복 episode와 scenario 다양화가 남음.

@@ -29,7 +29,7 @@ UTMR가 baseline보다 높은 결과를 냈습니다.
 | K256 retuned guard | 1000 | 1000 / 0 | 0.8900427692 | 보수 guard subset 개선 |
 | WoTE baseline | 1000 | 1000 / 0 | 0.8638675087 | subset 기준선 |
 | UTMR guarded safety | 1000 | 1000 / 0 | 0.8720460220 | tuning용 subset 결과 |
-| AWSIM Odometry/service smoke | 1 episode | observed row + planner rows | route success 0% | live pipeline smoke, benchmark 아님 |
+| AWSIM live batch fastpath | 5 variants x 1 episode | 5 / 0 observed rows | success 100%, collision 0% | live closed-loop smoke 성공 |
 
 `UTMR guarded safety`는 baseline 후보를 무조건 바꾸지 않고, fine metric
 score가 충분히 좋아지고 coarse score 손실이 제한될 때만 rerank를 받아들이는
@@ -69,20 +69,23 @@ WoTE 공개 자산의 원본 anchor 수에서도 같은 guard가 유지되는지
 
 ### 3. AWSIM/Autoware live integration
 
-AWSIM/Autoware live path도 실제로 실행했습니다. 현재 sample scenario는
-route arrival이 아직 잡히지 않아 성능 비교 benchmark는 아니지만,
-Autoware/AWSIM/UTMR helper가 함께 뜨고 planner step log와 observed episode
-CSV를 만드는 smoke 상태까지 도달했습니다.
+AWSIM/Autoware live path도 실제로 실행했습니다. 이전에는 localization
+초기화가 `The vehicle is not stopped.`로 실패하거나 route success가 `0%`였지만,
+현재는 Autoware stop-check topic 기준 stationary wait, automatic pose
+initializer 비활성화, stale route clear, synthetic route publisher 기본 off,
+planning waypoint route 기본 off를 적용해 sample scenario에서 observed
+closed-loop episode CSV를 생성합니다.
 
 | 코드 | 역할 |
 | --- | --- |
 | `autoware/utmr_scripts/helpers/utmr_planner_node.py` | Autoware `/planning/trajectory`로 UTMR trajectory를 publish합니다. |
-| `autoware/utmr_scripts/helpers/route_publisher.py` | sample scenario route를 `/planning/mission_planning/route`로 주기 publish합니다. |
+| `autoware/utmr_scripts/helpers/route_publisher.py` | synthetic route publisher입니다. 현재 AWSIM 기본값에서는 빈 route topic 오염을 피하려고 off입니다. |
 | `autoware/utmr_scripts/helpers/drive_gear_injector.py` | gear/turn/hazard/control/gate/heartbeat command를 publish해 command gate warmup을 돕습니다. |
+| `autoware/utmr_scripts/helpers/wait_for_stationary.py` | Autoware pose initializer의 실제 stop-check topic(`/sensing/vehicle_velocity_converter/twist_with_covariance`) 기준으로 localization init 전 정지를 확인합니다. |
 | `autoware/utmr_scripts/helpers/static_tf_injector.py` | AWSIM demo frame mismatch를 줄이기 위해 `tamagawa/imu_link`, `velodyne_top` TF를 publish합니다. |
 | `autoware/utmr_scripts/helpers/collision_monitor.py` | object topic 기반 collision bool bridge입니다. `Odometry`/`KinematicState` localization input을 선택 지원합니다. |
 | `autoware/utmr_scripts/helpers/episode_metric_monitor.py` | speed, distance, route arrival, collision을 episode CSV로 기록합니다. 실제 AWSIM topic의 `nav_msgs/Odometry`도 지원합니다. |
-| `autoware/utmr_scripts/run_utmr_demo.sh` | localization/route/operation/gate service를 재시도하고, localization은 응답의 `success=True`까지 확인합니다. readiness 실패 시 `UTMR_READY=0`와 exit code `2`를 남깁니다. |
+| `autoware/utmr_scripts/run_utmr_demo.sh` | localization/route/operation/gate service를 재시도하고, localization은 응답의 `success=True`까지 확인합니다. localization retry마다 stationary wait를 다시 수행합니다. readiness 실패 시 `UTMR_READY=0`와 exit code `2`를 남깁니다. |
 | `autoware/utmr_scripts/run_straight_demo.sh` | straight trajectory smoke launcher입니다. `run_utmr_demo.sh`와 같은 readiness helper를 써서 operation 실패 시 gate unstop을 보내지 않습니다. |
 | `autoware/utmr_scripts/service_calls.sh` | Autoware service 응답 패턴 검증과 재시도 helper입니다. |
 | `autoware/utmr_scripts/service_readiness.sh` | localization, route, autonomous mode, vehicle gate 순서를 fail-closed로 실행합니다. operation 실패 시 `{stop:false}` gate call을 보내지 않습니다. |
@@ -91,49 +94,39 @@ CSV를 만드는 smoke 상태까지 도달했습니다.
 | `experiments/utmr/awsim_batch_runner.py` | baseline, utmr, ablation variant를 batch로 실행합니다. |
 | `autoware/utmr_scripts/probe_live_topics.sh` | 실제 AWSIM/Autoware topic 이름을 probe합니다. |
 
-최신 live smoke/diagnosis:
+최신 live batch:
 
 ```text
-experiments/utmr/results/awsim_localization_strict_smoke_20260714_110423
-experiments/utmr/results/awsim_odometry_adapter_smoke_20260714_105709
+experiments/utmr/results/awsim_live_batch_fastpath_20260714_134703
 ```
 
-| 항목 | 결과 |
-| --- | --- |
-| Variant | `utmr` |
-| Odometry adapter smoke | observed metric row, `distance_m=0.0`, `mean_speed_kmh=0.0` |
-| Service-order smoke | operation mode and vehicle gate service calls reached |
-| Strict localization smoke | localization retries reject `success=False` responses |
-| Current blocker | AWSIM sample often returns `The vehicle is not stopped.` during localization init |
-| Benchmark status | route success still `0%`, not a closed-loop performance table yet |
+| Method | Success | Collision | Mean speed km/h | Driving score |
+| --- | ---: | ---: | ---: | ---: |
+| WoTE | 100% | 0% | 5.963 | 76.24 |
+| WoTE + UTMR (Ours) | 100% | 0% | 6.096 | 76.27 |
+| WoTE + Uniform Fine | 100% | 0% | 5.478 | 76.14 |
+| UTMR (fine dt only) | 100% | 0% | 8.919 | 76.86 |
+| UTMR (short horizon only) | 100% | 0% | 5.784 | 76.21 |
 
-이전 route/control smoke와 비교하면 다음 경고가 줄었습니다.
+산출물:
 
-| 로그 패턴 | 최신 count |
-| --- | ---: |
-| `mission_planning/route has not received` | 0 |
-| `waiting for route msg` | 0 |
-| `GearCommand` | 2 |
-| `TurnIndicatorsCommand` | 3 |
-| `HazardLightsCommand` | 3 |
-| `Emergency!` | 9 |
-| `heartbeat is timeout` | 1 |
-| `Please publish TF base_link to tamagawa/imu_link` | 3 |
-| `Please publish TF velodyne_top to base_link` | 1 |
+```text
+raw/awsim_batch_episodes.csv
+raw/awsim_batch_steps.jsonl
+tables/table_i_main_closed_loop.md
+tables/table_ii_runtime.md
+tables/table_iii_ablation_closed_loop.md
+figures/fig3_speed_uncertainty.png
+figures/fig4_selection_bias.png
+figures/fig5_score_landscape.png
+```
 
 해석:
 
-- route-missing/waiting 문제는 route publisher로 해결됐습니다.
-- `Odometry` topic mismatch는 해결됐습니다. 실제 `/localization/kinematic_state`
-  publisher가 `nav_msgs/Odometry`인 것을 runtime probe로 확인했고 helper들이
-  그 타입을 받을 수 있게 바꿨습니다.
-- command gate warmup 경고는 크게 줄었지만 장기 실행 중 일부 남아 있습니다.
-- 현재 가장 큰 AWSIM blocker는 sample scenario의 localization/vehicle 상태입니다.
-  localization init이 `success=True`이면 metric은 숫자로 기록되지만, 다른 run에서는
-  `The vehicle is not stopped.`로 init이 실패해 fallback trajectory만 남습니다.
-- dynamic TF helper로 sensor/localization TF 경고는 크게 줄었습니다.
-- 하지만 route state, duplicated ADAPI node, localization/control diagnostics가
-  남아 있어 아직 closed-loop benchmark 결과로 쓰면 안 됩니다.
+- AWSIM/Autoware/UTMR helper path는 이제 5개 variant 모두 observed row를 남깁니다.
+- 이 값은 `episodes=1`인 live smoke라 통계적 결론용은 아닙니다.
+- 논문 수준의 live benchmark로 쓰려면 같은 scenario 또는 추가 scenario에서
+  `5+` episodes per variant 반복이 필요합니다.
 
 ## 어떤 실험을 했고 어떤 결과가 나왔나
 
@@ -295,7 +288,7 @@ UTMR_MAX_COARSE_DROP=0.5
 ## 다음에 해야 할 일
 
 1. K256 retuned guard를 full `12146`으로 확대할지 결정.
-2. AWSIM scenario를 route success가 잡히는 형태로 개선하고 5+ episode 반복 실행.
+2. AWSIM live batch를 `5+` episodes per variant로 반복해 평균/표준편차를 확보.
 3. 논문 표/그림용 최종 정리: K64 full PDM score, K256 check, sensitivity, runtime, AWSIM.
 
 ## 재현 명령
