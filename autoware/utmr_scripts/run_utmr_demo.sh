@@ -64,6 +64,7 @@ export UTMR_GOAL_QW
 
 source /opt/ros/humble/setup.bash
 source "$SCRIPT_DIR/service_calls.sh"
+source "$SCRIPT_DIR/service_readiness.sh"
 source "$SCRIPT_DIR/setup_runtime_overlay.sh"
 cd "$AUTOWARE_DIR"
 source install/setup.bash
@@ -128,72 +129,11 @@ echo "waiting for Autoware services..."
 sleep "$UTMR_SERVICE_INITIAL_WAIT_S"
 
 INIT_REQUEST="{method: 1, pose_with_covariance: [{header: {frame_id: map}, pose: {pose: {position: {x: $UTMR_INIT_X, y: $UTMR_INIT_Y, z: $UTMR_INIT_Z}, orientation: {x: $UTMR_INIT_QX, y: $UTMR_INIT_QY, z: $UTMR_INIT_QZ, w: $UTMR_INIT_QW}}, covariance: $UTMR_INIT_COVARIANCE}}]}"
-localization_ready=0
-if utmr_call_service_with_retry \
-  "localization initialize" \
-  /localization/initialize \
-  autoware_localization_msgs/srv/InitializeLocalization \
-  "$INIT_REQUEST" \
-  "$UTMR_SERVICE_RETRY_COUNT" \
-  "$UTMR_SERVICE_RETRY_SLEEP_S" \
-  "success=True"; then
-  localization_ready=1
-fi
-
 ROUTE_REQUEST="{header: {frame_id: map}, option: {allow_goal_modification: true}, goal: {position: {x: $UTMR_GOAL_X, y: $UTMR_GOAL_Y, z: $UTMR_GOAL_Z}, orientation: {x: $UTMR_GOAL_QX, y: $UTMR_GOAL_QY, z: $UTMR_GOAL_QZ, w: $UTMR_GOAL_QW}}, waypoints: []}"
-route_ready=0
-if utmr_call_service_with_retry \
-  "ADAPI route set" \
-  /api/routing/set_route_points \
-  autoware_adapi_v1_msgs/srv/SetRoutePoints \
-  "$ROUTE_REQUEST" \
-  "$UTMR_SERVICE_RETRY_COUNT" \
-  "$UTMR_SERVICE_RETRY_SLEEP_S" \
-  "success=True|The route is already set"; then
-  route_ready=1
-fi
-
-if [[ "$localization_ready" == "1" && "$route_ready" == "1" ]]; then
-  operation_ready=0
-  if utmr_call_service_with_retry \
-    "operation mode autonomous" \
-    /system/operation_mode/change_operation_mode \
-    autoware_system_msgs/srv/ChangeOperationMode \
-    "{mode: 2}" \
-    2 \
-    1 \
-    "success=True"; then
-    operation_ready=1
-  fi
-
-  gate_ready=0
-  if utmr_call_service_with_retry \
-    "vehicle command gate unstop" \
-    /control/vehicle_cmd_gate/set_stop \
-    tier4_control_msgs/srv/SetStop \
-    "{stop: false, request_source: utmr}" \
-    2 \
-    1 \
-    "success=True"; then
-    gate_ready=1
-  fi
-else
-  operation_ready=0
-  gate_ready=0
-  echo "skip autonomous/gate services: localization_ready=$localization_ready route_ready=$route_ready"
-fi
-
 WAYPOINT_ROUTE_REQUEST="{header: {frame_id: map}, goal_pose: {position: {x: $UTMR_GOAL_X, y: $UTMR_GOAL_Y, z: $UTMR_GOAL_Z}, orientation: {x: $UTMR_GOAL_QX, y: $UTMR_GOAL_QY, z: $UTMR_GOAL_QZ, w: $UTMR_GOAL_QW}}, waypoints: [], uuid: {uuid: $UTMR_ROUTE_UUID_BYTES}, allow_modification: true}"
-utmr_call_service_with_retry \
-  "planning waypoint route set" \
-  /planning/set_waypoint_route \
-  autoware_planning_msgs/srv/SetWaypointRoute \
-  "$WAYPOINT_ROUTE_REQUEST" \
-  1 \
-  1 \
-  "success=True|The route is already set" || true
+utmr_run_readiness_sequence "$INIT_REQUEST" "$ROUTE_REQUEST" "$WAYPOINT_ROUTE_REQUEST"
 
-if [[ "$localization_ready" == "1" && "$route_ready" == "1" && "$operation_ready" == "1" && "$gate_ready" == "1" ]]; then
+if utmr_readiness_success; then
   echo "done. UTMR_READY=1 planner mode=$UTMR_MODE, step log=$UTMR_STEP_LOG"
 else
   echo "degraded. UTMR_READY=0 localization_ready=$localization_ready route_ready=$route_ready operation_ready=$operation_ready gate_ready=$gate_ready planner mode=$UTMR_MODE, step log=$UTMR_STEP_LOG"

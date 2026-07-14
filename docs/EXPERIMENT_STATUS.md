@@ -36,8 +36,10 @@ The repository contains the source needed to reproduce the current experiments:
 | `third_party/WoTE/navsim/agents/WoTE/WoTE_agent.py` | NAVSIM step logging for UTMR diagnostics. |
 | `third_party/WoTE/navsim/agents/WoTE/configs/default.py` | UTMR config defaults. |
 | `autoware/utmr_scripts/` | AWSIM/Autoware helper scripts and ROS nodes. |
+| `autoware/utmr_scripts/run_straight_demo.sh` | Straight trajectory smoke launcher using the shared fail-closed readiness sequence. |
 | `autoware/utmr_scripts/service_calls.sh` | Shell helper for Autoware service retry and response-pattern validation. |
-| `experiments/utmr/test_service_calls.sh` | Fake-ROS shell test for service gating behavior. |
+| `autoware/utmr_scripts/service_readiness.sh` | Production readiness sequence for localization, route, operation mode, and gate unstop. |
+| `experiments/utmr/test_service_calls.sh` | Fake-ROS shell test for localization-failure and operation-failure gate behavior. |
 
 Large folders are intentionally not tracked: NAVSIM logs, sensor blobs, metric
 cache, checkpoints, Autoware builds, AWSIM binaries, raw result logs, and local

@@ -83,8 +83,10 @@ CSV를 만드는 smoke 상태까지 도달했습니다.
 | `autoware/utmr_scripts/helpers/collision_monitor.py` | object topic 기반 collision bool bridge입니다. `Odometry`/`KinematicState` localization input을 선택 지원합니다. |
 | `autoware/utmr_scripts/helpers/episode_metric_monitor.py` | speed, distance, route arrival, collision을 episode CSV로 기록합니다. 실제 AWSIM topic의 `nav_msgs/Odometry`도 지원합니다. |
 | `autoware/utmr_scripts/run_utmr_demo.sh` | localization/route/operation/gate service를 재시도하고, localization은 응답의 `success=True`까지 확인합니다. readiness 실패 시 `UTMR_READY=0`와 exit code `2`를 남깁니다. |
+| `autoware/utmr_scripts/run_straight_demo.sh` | straight trajectory smoke launcher입니다. `run_utmr_demo.sh`와 같은 readiness helper를 써서 operation 실패 시 gate unstop을 보내지 않습니다. |
 | `autoware/utmr_scripts/service_calls.sh` | Autoware service 응답 패턴 검증과 재시도 helper입니다. |
-| `experiments/utmr/test_service_calls.sh` | localization 실패 시 autonomous/gate를 호출하지 않는지 검증하는 fake-ROS shell test입니다. |
+| `autoware/utmr_scripts/service_readiness.sh` | localization, route, autonomous mode, vehicle gate 순서를 fail-closed로 실행합니다. operation 실패 시 `{stop:false}` gate call을 보내지 않습니다. |
+| `experiments/utmr/test_service_calls.sh` | production readiness 함수를 fake-ROS로 실행해 localization 실패와 operation 실패 모두에서 gate를 호출하지 않는지 검증합니다. |
 | `experiments/utmr/awsim_supervisor.py` | Autoware/AWSIM helper process를 묶어 episode 단위로 실행합니다. |
 | `experiments/utmr/awsim_batch_runner.py` | baseline, utmr, ablation variant를 batch로 실행합니다. |
 | `autoware/utmr_scripts/probe_live_topics.sh` | 실제 AWSIM/Autoware topic 이름을 probe합니다. |

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 utmr_service_available() {
-  timeout "$UTMR_SERVICE_LIST_TIMEOUT_S" ros2 service list 2>/tmp/utmr-ros2-service-list.err | grep -qx "$1"
+  timeout "$UTMR_SERVICE_LIST_TIMEOUT_S" ros2 service list 2>/dev/null | grep -qx "$1"
 }
 
 utmr_call_service_with_retry() {

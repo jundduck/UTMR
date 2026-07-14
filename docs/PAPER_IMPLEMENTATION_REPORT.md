@@ -483,8 +483,10 @@ success가 `0%`이기 때문입니다.
 | `autoware/utmr_scripts/helpers/episode_metric_monitor.py` | route, speed, distance, collision metric CSV 작성, AWSIM `nav_msgs/Odometry` topic 지원 |
 | `autoware/utmr_scripts/helpers/helper_shutdown.py` | 정상 shutdown 중 발생하는 ROS context error만 제한적으로 suppress |
 | `autoware/utmr_scripts/run_utmr_demo.sh` | Autoware service retry/order, localization `success=True` response 확인 |
+| `autoware/utmr_scripts/run_straight_demo.sh` | straight trajectory smoke 실행, shared readiness helper로 gate unstop fail-closed 처리 |
 | `autoware/utmr_scripts/service_calls.sh` | service response pattern 검증과 재시도 |
-| `experiments/utmr/test_service_calls.sh` | localization 실패 시 autonomous/gate skip 검증 |
+| `autoware/utmr_scripts/service_readiness.sh` | localization/route/operation/gate readiness 순서 실행, operation 실패 시 gate unstop skip |
+| `experiments/utmr/test_service_calls.sh` | production readiness 함수를 fake-ROS로 검증, localization 실패와 operation 실패 모두 gate skip 확인 |
 | `experiments/utmr/awsim_supervisor.py` | episode 단위 실행 supervisor |
 | `experiments/utmr/awsim_batch_runner.py` | variant batch 실행 |
 | `experiments/utmr/scenarios/awsim_shinjuku_sample.json` | AWSIM sample scenario |
