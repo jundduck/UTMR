@@ -188,6 +188,17 @@ experiments/utmr/results/autoware_scenario_sim_paper_pair_5eps_safe_domain_20260
   runner에 `SCENARIO_MAX_ROS_DOMAIN_ID` cap/wrap을 추가했습니다.
 - safe-domain 재실행에서는 baseline과 UTMR 모두 최종 episode 기준 5/5
   통과했고, UTMR 평균 driving score가 baseline보다 `+0.2537` 높았습니다.
+- 후속 hardening에서 `ISOLATE_SCENARIO_PORT=1`은 금지했고, Scenario
+  Simulator port는 `5555`로 고정했습니다. 격리는 safe wrapped
+  `ROS_DOMAIN_ID`만 사용합니다.
+- shell 숫자 입력은 Bash arithmetic 전에 정수로 파싱하고,
+  `empty_sim_inputs.py`는 `AWSIM_EMPTY_SIMULATION_GUARD=1` 없이는 synthetic
+  perception/emergency/MRM topic을 publish하지 않습니다.
+- 2026-07-22 post-hardening 1-episode smoke:
+  baseline `passed`, score `75.4291`; UTMR `passed`, score `76.7892`.
+- 현재 200-episode paper-candidate run:
+  `experiments/utmr/results/autoware_scenario_sim_paper_pair_200eps_postfix_20260722_181528`
+  진행 중입니다.
 
 ## 어떤 실험을 했고 어떤 결과가 나왔나
 

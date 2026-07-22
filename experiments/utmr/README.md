@@ -2,13 +2,6 @@
 
 This directory keeps the paper-reproduction work inside `/home/yax/UTMR` without symlinks.
 
-Execution note for GitHub users: the scripts here are the experiment source and
-runbooks, not a standalone binary bundle. The actual long runs used a prepared
-local UTMR workspace with ROS 2 Humble, built Autoware packages, `shinjuku_map`,
-Autoware model/data folders, and UTMR-local runtime overlays already present.
-Those build products, datasets, metric caches, and raw result logs are excluded
-from GitHub because they are large machine-local artifacts.
-
 Paper settings from the attachment:
 
 - candidate trajectories: `K=64`
@@ -165,7 +158,6 @@ MAX_ATTEMPTS=3 \
 SCENARIO_BASE_ROS_DOMAIN_ID=80 \
 SCENARIO_MAX_ROS_DOMAIN_ID=120 \
 ISOLATE_ROS_DOMAIN=1 \
-ISOLATE_SCENARIO_PORT=0 \
 START_BASELINE_PLANNER=1 \
 PRINT_LOG_TAIL=0 \
 experiments/utmr/run_autoware_scenario_sim_paper_batch.sh
@@ -194,6 +186,43 @@ because FastDDS reports `Calculated port number is too high` above domain
 `232`. A diagnostic 5-episode run using base domain `220` confirmed this
 failure mode on domains `233..235`; the safe-domain rerun above avoids that
 middleware limit and passes all 10 final variant/episode rows.
+
+Post-hardening update:
+
+- `ISOLATE_SCENARIO_PORT=1` is now rejected. Scenario Simulator traffic stays on
+  fixed port `5555`; isolation is only via safe wrapped ROS domains.
+- Numeric shell inputs such as `SCENARIO_BASE_ROS_DOMAIN_ID`, `EPISODES`, and
+  `MAX_ATTEMPTS` are parsed before Bash arithmetic.
+- `empty_sim_inputs.py` refuses to publish synthetic Autoware perception,
+  emergency, or MRM topics unless `AWSIM_EMPTY_SIMULATION_GUARD=1` is set by
+  the experiment runner.
+- Episode metrics leave collision/timeout blank when no measured source exists,
+  instead of silently treating unknown collision as false or unknown timeout as
+  true.
+- Scenario logs often contain `Subscribed ... is timed out`, transient/recovered
+  `MRM_FAILED`, and teardown `process has died ... exit code -11` even when
+  Scenario Simulator prints `Passed`. The runner treats `Passed` as the
+  scenario authority unless a strong failure marker such as `AutowareError`,
+  `exitFailure`, the runner wall-clock timeout, or `TimeoutError` appears.
+
+Validated after the hardening patch:
+
+```text
+experiments/utmr/results/autoware_scenario_sim_postfix_pair_1eps_reclass_20260722_181208
+
+summary_aggregate.tsv
+variant   episodes  passed  success_pct  mean_attempts  mean_distance_m  mean_speed_kmh  mean_driving_score
+baseline  1         1       100.0000     1.0000         76.5022          5.1893          75.4291
+utmr      1         1       100.0000     1.0000         76.7878          10.7439         76.7892
+```
+
+Current long-run candidate:
+
+```text
+experiments/utmr/results/autoware_scenario_sim_paper_pair_200eps_postfix_20260722_181528
+status: running
+target: baseline/utmr x 200 episodes, max 3 attempts per episode
+```
 
 `setup_wote_runtime.sh` installs the UTMR-local Python packages needed to import WoTE/NAVSIM without creating a virtualenv or symlinks. `source_wote_runtime.sh` exports `PYTHONPATH`, `NAVSIM_DEVKIT_ROOT`, `OPENSCENE_DATA_ROOT`, and the matching map/exp roots for the current shell.
 

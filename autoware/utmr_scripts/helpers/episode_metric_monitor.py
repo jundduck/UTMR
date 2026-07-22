@@ -34,6 +34,8 @@ class EpisodeMetricMonitor(Node):
         self.goal_y = optional_float(os.environ.get("UTMR_GOAL_Y", ""))
         self.route_length_m = optional_float(os.environ.get("UTMR_ROUTE_LENGTH_M", ""))
         self.collision_topic = os.environ.get("UTMR_COLLISION_TOPIC", "")
+        self.has_collision_topic = bool(self.collision_topic)
+        self.assume_timeout_on_stop = env_bool(os.environ.get("UTMR_METRIC_ASSUME_TIMEOUT_ON_STOP", ""), False)
         self.kinematic_topic = os.environ.get("UTMR_KINEMATIC_TOPIC", "/localization/kinematic_state")
         self.kinematic_msg_type = os.environ.get("UTMR_KINEMATIC_MSG_TYPE", "KinematicState")
         self.route_state_topic = os.environ.get("UTMR_ROUTE_STATE_TOPIC", "/api/routing/state")
@@ -127,10 +129,16 @@ class EpisodeMetricMonitor(Node):
         notes = []
         if not self.route_state_enabled:
             notes.append("route_state_subscription_unavailable")
+        if not self.has_collision_topic:
+            notes.append("collision_topic_unavailable")
+        if not self.assume_timeout_on_stop and not self.success and not self.collision:
+            notes.append("timeout_unclassified")
         if not has_motion_samples:
             notes.append("no_kinematic_samples")
         if self.dropped_uninitialized_samples:
             notes.append(f"dropped_uninitialized_samples={self.dropped_uninitialized_samples}")
+        collision_value = self.collision if self.has_collision_topic else ""
+        timeout_value = self.timeout_value()
         path = Path(self.episode_csv)
         path.parent.mkdir(parents=True, exist_ok=True)
         exists = path.exists()
@@ -157,9 +165,9 @@ class EpisodeMetricMonitor(Node):
                     "method": self.method,
                     "variant": self.variant,
                     "episode_id": self.episode_id,
-                    "collision": self.collision,
+                    "collision": collision_value,
                     "success": self.success,
-                    "timeout": not self.collision and not self.success,
+                    "timeout": timeout_value,
                     "distance_m": distance,
                     "route_length_m": self.route_length_m if self.route_length_m is not None else "",
                     "mean_speed_kmh": mean_speed,
@@ -169,6 +177,13 @@ class EpisodeMetricMonitor(Node):
                 }
             )
         self.get_logger().info(f"wrote episode metrics to {path}")
+
+    def timeout_value(self):
+        if self.success or self.collision:
+            return False
+        if self.assume_timeout_on_stop:
+            return True
+        return ""
 
     def distance_m(self):
         if self.first_pose is None or self.last_pose is None:
@@ -197,6 +212,12 @@ def optional_float(value):
     if value in ("", None):
         return None
     return float(value)
+
+
+def env_bool(value, default):
+    if value in ("", None):
+        return default
+    return str(value).lower() in {"1", "true", "yes", "on"}
 
 
 def mean(values):

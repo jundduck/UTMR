@@ -418,6 +418,40 @@ What this means:
 - Safe-domain run used `SCENARIO_BASE_ROS_DOMAIN_ID=80` and
   `SCENARIO_MAX_ROS_DOMAIN_ID=120`. It finished with no symlinks under UTMR.
 
+Post-hardening status:
+
+- `ISOLATE_SCENARIO_PORT=1` is now rejected. Scenario Simulator stays on fixed
+  port `5555`; repeat attempts are isolated only with wrapped ROS domains.
+- Numeric shell inputs are parsed before Bash arithmetic.
+- `empty_sim_inputs.py` now requires `AWSIM_EMPTY_SIMULATION_GUARD=1` before it
+  publishes synthetic Autoware perception, emergency, or MRM topics.
+- Collision and timeout metrics are left blank when no measured source exists.
+- Runtime evidence showed that Scenario Simulator can print transient
+  `Subscribed ... is timed out`, recovered `MRM_FAILED`, and teardown
+  `process has died ... exit code -11` lines even in runs that end with
+  `Passed`; the runner now lets `Passed` stand unless a strong marker such as
+  `AutowareError`, `exitFailure`, the runner wall-clock timeout, or
+  `TimeoutError` appears.
+
+Post-hardening 1-episode smoke:
+
+```text
+experiments/utmr/results/autoware_scenario_sim_postfix_pair_1eps_reclass_20260722_181208
+```
+
+| Variant | Episodes | Passed | Success | Mean attempts | Mean distance m | Mean speed km/h | Driving score |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 1 | 1 | 100% | 1.0000 | 76.5022 | 5.1893 | 75.4291 |
+| UTMR | 1 | 1 | 100% | 1.0000 | 76.7878 | 10.7439 | 76.7892 |
+
+Current long-run candidate:
+
+```text
+experiments/utmr/results/autoware_scenario_sim_paper_pair_200eps_postfix_20260722_181528
+status: running
+target: baseline/utmr x 200 episodes, max 3 attempts per episode
+```
+
 AWSIM live interpretation:
 
 - The AWSIM + Autoware + UTMR planner + reducer path now runs end-to-end and

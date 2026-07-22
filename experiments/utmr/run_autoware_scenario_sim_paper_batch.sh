@@ -33,6 +33,7 @@ START_MRM_HEARTBEAT="${START_MRM_HEARTBEAT:-1}"
 STABILIZE_CMD_GATE="${STABILIZE_CMD_GATE:-1}"
 START_BASELINE_PLANNER="${START_BASELINE_PLANNER:-1}"
 PRINT_LOG_TAIL="${PRINT_LOG_TAIL:-1}"
+CURRENT_SCENARIO_PID=""
 
 draw_bar() {
   local current="$1"
@@ -50,6 +51,61 @@ draw_bar() {
   fill="${fill// /#}"
   blank="${blank// /-}"
   printf "\r[%s%s] %3d%%  %4ds/%-4ds  %s" "$fill" "$blank" "$pct" "$current" "$total" "$label"
+}
+
+is_true() {
+  local value="${1:-}"
+  case "${value,,}" in
+    1|true|yes|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+require_uint_env() {
+  local name="$1"
+  local value="${!name}"
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "$name must be an unsigned integer, got $value" >&2
+    exit 2
+  fi
+  printf -v "$name" '%d' "$((10#$value))"
+}
+
+require_uint_range() {
+  local name="$1"
+  local min="$2"
+  local max="$3"
+  require_uint_env "$name"
+  local value="${!name}"
+  if (( value < min || value > max )); then
+    echo "$name must be in [$min, $max], got $value" >&2
+    exit 2
+  fi
+}
+
+validate_runtime_config() {
+  require_uint_range SCENARIO_GLOBAL_TIMEOUT 1 86400
+  require_uint_range SCENARIO_INITIALIZE_DURATION 0 86400
+  require_uint_range SCENARIO_BASE_PORT 1 65535
+  require_uint_range SCENARIO_BASE_ROS_DOMAIN_ID 0 232
+  require_uint_range SCENARIO_MAX_ROS_DOMAIN_ID 0 232
+  require_uint_range WALL_GRACE_S 0 86400
+  require_uint_range RUN_COOLDOWN_S 0 86400
+  require_uint_range EPISODES 0 100000
+  require_uint_range MAX_ATTEMPTS 1 1000
+
+  if (( SCENARIO_BASE_ROS_DOMAIN_ID > SCENARIO_MAX_ROS_DOMAIN_ID )); then
+    echo "SCENARIO_BASE_ROS_DOMAIN_ID must be <= SCENARIO_MAX_ROS_DOMAIN_ID, got $SCENARIO_BASE_ROS_DOMAIN_ID > $SCENARIO_MAX_ROS_DOMAIN_ID" >&2
+    exit 2
+  fi
+  if is_true "$ISOLATE_SCENARIO_PORT"; then
+    echo "Scenario Simulator port isolation is unsupported; keep fixed port $SCENARIO_BASE_PORT" >&2
+    exit 2
+  fi
 }
 
 prepend_env_path_if_dir() {
@@ -80,9 +136,26 @@ cleanup_helpers() {
       kill -INT "$pid" 2>/dev/null || true
     fi
   fi
-  UTMR_HELPER_LOG_DIR="${HELPER_LOG_DIR:-}" "$STOP_HELPERS" >/dev/null 2>&1 || true
+  UTMR_HELPER_PID_DIR="${HELPER_LOG_DIR:-}" \
+    UTMR_HELPER_LOG_DIR="${HELPER_LOG_DIR:-}" \
+    "$STOP_HELPERS" >/dev/null 2>&1 || true
 }
-trap cleanup_helpers EXIT
+
+stop_scenario_process_group() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] || return 0
+  kill -0 "$pid" 2>/dev/null || return 0
+  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  sleep 8
+  kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+}
+
+cleanup_all() {
+  stop_scenario_process_group "$CURRENT_SCENARIO_PID"
+  cleanup_helpers
+}
+trap cleanup_all EXIT
+trap 'trap - EXIT; cleanup_all; exit 130' INT TERM
 
 start_helper() {
   local name="$1"
@@ -113,7 +186,7 @@ ros_domain_for_run() {
   local run_number="$1"
   local domain_span
 
-  if [[ "$ISOLATE_ROS_DOMAIN" == "1" || "$ISOLATE_ROS_DOMAIN" == "true" ]]; then
+  if is_true "$ISOLATE_ROS_DOMAIN"; then
     domain_span=$((SCENARIO_MAX_ROS_DOMAIN_ID - SCENARIO_BASE_ROS_DOMAIN_ID + 1))
     echo $((SCENARIO_BASE_ROS_DOMAIN_ID + ((run_number - 1) % domain_span)))
   else
@@ -124,9 +197,13 @@ ros_domain_for_run() {
 classify_result() {
   local log_file="$1"
   local exit_code="$2"
-  if grep -Eq $'\033\\[32mPassed|Passed' "$log_file"; then
+  if grep -Eq 'AutowareError|exitFailure|wall-clock timeout|TimeoutError' "$log_file"; then
+    echo "failed"
+  elif [[ "$exit_code" == "124" ]]; then
+    echo "failed"
+  elif grep -Eq $'\033\\[32mPassed|Passed' "$log_file"; then
     echo "passed"
-  elif grep -Eq 'exitFailure|AutowareError|Failed|failure|timeout|timed out' "$log_file"; then
+  elif grep -Eq 'MRM_FAILED|process has died.*exit code -?[1-9][0-9]*' "$log_file"; then
     echo "failed"
   elif [[ "$exit_code" == "0" ]]; then
     echo "completed_no_pass_marker"
@@ -139,6 +216,7 @@ write_summary() {
   python3 - "$OUT_ROOT" <<'PY'
 import csv
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -154,6 +232,12 @@ if episode_path.exists():
     with episode_path.open(newline="", encoding="utf-8") as fp:
         episode_rows = list(csv.DictReader(fp))
 episodes_by_id = {row.get("episode_id", ""): row for row in episode_rows}
+
+def read_log(status):
+    log_path = Path(status.get("log", ""))
+    if not log_path.exists():
+        return ""
+    return log_path.read_text(encoding="utf-8", errors="replace")
 
 def step_count(status):
     variant = status["variant"]
@@ -171,6 +255,16 @@ def row_for_status(status):
     episode = status["episode"]
     episode_id = status.get("episode_id") or f"scenario_sim_{variant}_{episode}"
     metrics = episodes_by_id.get(episode_id, {})
+    log_text = read_log(status)
+    timeout = metrics.get("timeout", "")
+    if (
+        status.get("exit_code") == "124"
+        or "wall-clock timeout" in log_text
+        or "TimeoutError" in log_text
+    ):
+        timeout = "True"
+    elif status.get("result") != "passed" and timeout not in ("True", "False"):
+        timeout = ""
     return {
         "variant": variant,
         "episode": episode,
@@ -179,10 +273,11 @@ def row_for_status(status):
         "exit_code": status["exit_code"],
         "success": metrics.get("success", ""),
         "collision": metrics.get("collision", ""),
-        "timeout": metrics.get("timeout", ""),
+        "timeout": timeout,
         "distance_m": metrics.get("distance_m", ""),
         "mean_speed_kmh": metrics.get("mean_speed_kmh", ""),
         "driving_score": metrics.get("driving_score", ""),
+        "failure_reason": failure_reason(status, log_text),
         "step_rows": str(step_count(status)),
     }
 
@@ -194,9 +289,35 @@ def write_tsv(path, fields, rows):
 
 def as_float(value):
     try:
-        return float(value)
-    except ValueError:
+        parsed = float(value)
+    except (TypeError, ValueError):
         return None
+    if math.isnan(parsed):
+        return None
+    return parsed
+
+def mean_text(values):
+    numbers = [value for value in values if value is not None]
+    if not numbers:
+        return "0.0000"
+    return f"{(sum(numbers) / len(numbers)):.4f}"
+
+def failure_reason(status, log_text):
+    if status.get("result") == "passed":
+        return ""
+    if status.get("exit_code") == "124" or "wall-clock timeout" in log_text:
+        return "wall_clock_timeout"
+    if "MRM_FAILED" in log_text:
+        return "mrm_failed"
+    if "AutowareError" in log_text:
+        return "autoware_error"
+    if "exitFailure" in log_text:
+        return "scenario_exit_failure"
+    if "TimeoutError" in log_text:
+        return "timeout"
+    if "process has died" in log_text:
+        return "process_died"
+    return status.get("result", "")
 
 attempt_fields = [
     "variant",
@@ -210,6 +331,7 @@ attempt_fields = [
     "distance_m",
     "mean_speed_kmh",
     "driving_score",
+    "failure_reason",
     "step_rows",
 ]
 
@@ -247,10 +369,10 @@ for variant in sorted({row["variant"] for row in final_rows}):
         "episodes": len(rows),
         "passed": len(passed),
         "success_pct": f"{(100.0 * len(passed) / len(rows)):.4f}" if rows else "0.0000",
-        "mean_attempts": f"{(sum(item for item in attempts if item is not None) / len(rows)):.4f}" if rows else "0.0000",
-        "mean_distance_m": f"{(sum(item for item in distances if item is not None) / len(passed)):.4f}" if passed else "0.0000",
-        "mean_speed_kmh": f"{(sum(item for item in speeds if item is not None) / len(passed)):.4f}" if passed else "0.0000",
-        "mean_driving_score": f"{(sum(item for item in scores if item is not None) / len(passed)):.4f}" if passed else "0.0000",
+        "mean_attempts": mean_text(attempts),
+        "mean_distance_m": mean_text(distances),
+        "mean_speed_kmh": mean_text(speeds),
+        "mean_driving_score": mean_text(scores),
         "total_step_rows": int(sum(item for item in step_rows if item is not None)),
     })
 
@@ -269,6 +391,81 @@ print(out / "summary_aggregate.tsv")
 print((out / "summary_aggregate.tsv").read_text(encoding="utf-8"))
 PY
 }
+
+run_self_test() {
+  local self_root
+  mkdir -p "$ROOT/experiments/utmr/results"
+  self_root="$(mktemp -d "$ROOT/experiments/utmr/results/scenario_runner_self_test.XXXXXX")"
+  OUT_ROOT="$self_root"
+  mkdir -p "$OUT_ROOT/logs" "$OUT_ROOT/raw"
+
+  local original_base="$SCENARIO_BASE_ROS_DOMAIN_ID"
+  local original_max="$SCENARIO_MAX_ROS_DOMAIN_ID"
+  local original_isolate="$ISOLATE_ROS_DOMAIN"
+  SCENARIO_BASE_ROS_DOMAIN_ID=220
+  SCENARIO_MAX_ROS_DOMAIN_ID=232
+  ISOLATE_ROS_DOMAIN=1
+  if [[ "$(ros_domain_for_run 1)" != "220" || "$(ros_domain_for_run 13)" != "232" || "$(ros_domain_for_run 14)" != "220" ]]; then
+    echo "self-test failed: ROS domain wrapping" >&2
+    exit 1
+  fi
+  SCENARIO_BASE_ROS_DOMAIN_ID="$original_base"
+  SCENARIO_MAX_ROS_DOMAIN_ID="$original_max"
+  ISOLATE_ROS_DOMAIN="$original_isolate"
+
+  local fatal_log="$OUT_ROOT/logs/fatal_after_pass.log"
+  local teardown_log="$OUT_ROOT/logs/teardown_after_pass.log"
+  local timeout_arg_log="$OUT_ROOT/logs/timeout_arg_only.log"
+  local pass_log="$OUT_ROOT/logs/pass.log"
+  printf "Passed\nAutowareError\n" >"$fatal_log"
+  printf "process has died [pid 10, exit code -11, cmd teardown]\nPassed\n" >"$teardown_log"
+  printf "global_timeout := 240\n" >"$timeout_arg_log"
+  printf "Passed\n" >"$pass_log"
+  if [[ "$(classify_result "$fatal_log" 0)" != "failed" ]]; then
+    echo "self-test failed: strong fatal marker must override Passed" >&2
+    exit 1
+  fi
+  if [[ "$(classify_result "$teardown_log" 0)" != "passed" ]]; then
+    echo "self-test failed: teardown crash marker must not override Passed" >&2
+    exit 1
+  fi
+  if [[ "$(classify_result "$timeout_arg_log" 0)" != "completed_no_pass_marker" ]]; then
+    echo "self-test failed: launch timeout parameter must not count as timeout" >&2
+    exit 1
+  fi
+  if [[ "$(classify_result "$pass_log" 0)" != "passed" ]]; then
+    echo "self-test failed: Passed marker classification" >&2
+    exit 1
+  fi
+
+  printf "variant\tepisode\tattempt\tresult\texit_code\tlog\tstep_log\tepisode_id\n" >"$OUT_ROOT/raw/variant_status.tsv"
+  printf "baseline\t1\t1\tpassed\t0\t%s\t%s\tepisode_with_metrics\n" \
+    "$pass_log" "$OUT_ROOT/raw/baseline_1_steps.jsonl" >>"$OUT_ROOT/raw/variant_status.tsv"
+  printf "baseline\t2\t1\tpassed\t0\t%s\t%s\tepisode_without_metrics\n" \
+    "$pass_log" "$OUT_ROOT/raw/baseline_2_steps.jsonl" >>"$OUT_ROOT/raw/variant_status.tsv"
+  printf "{}\n" >"$OUT_ROOT/raw/baseline_1_steps.jsonl"
+  printf "{}\n{}\n" >"$OUT_ROOT/raw/baseline_2_steps.jsonl"
+  printf "method,variant,episode_id,collision,success,timeout,distance_m,route_length_m,mean_speed_kmh,driving_score,metric_source,metric_note\n" \
+    >"$OUT_ROOT/raw/scenario_sim_episodes.csv"
+  printf "baseline,baseline,episode_with_metrics,,True,,100.0,100.0,12.0,80.0,observed,\n" \
+    >>"$OUT_ROOT/raw/scenario_sim_episodes.csv"
+  write_summary >/dev/null
+  if ! awk -F'\t' '$1 == "baseline" { ok = ($6 == "100.0000" && $7 == "12.0000" && $8 == "80.0000") } END { exit ok ? 0 : 1 }' \
+    "$OUT_ROOT/summary_aggregate.tsv"; then
+    echo "self-test failed: aggregate means must ignore missing metric rows" >&2
+    cat "$OUT_ROOT/summary_aggregate.tsv" >&2
+    exit 1
+  fi
+
+  rm -rf "$self_root"
+  echo "ok runner self-test"
+}
+
+validate_runtime_config
+if is_true "${UTMR_SCENARIO_RUNNER_SELF_TEST:-0}"; then
+  run_self_test
+  exit 0
+fi
 
 mkdir -p "$OUT_ROOT/logs" "$OUT_ROOT/raw"
 "$ROOT/experiments/utmr/prepare_awsim_openscenario_runtime.sh" >/dev/null
@@ -290,19 +487,6 @@ prepend_ld_path_if_dir "$APT_ROOT/opt/ros/humble/lib/x86_64-linux-gnu"
 prepend_ld_path_if_dir "$APT_ROOT/opt/ros/humble/opt/zmqpp_vendor/lib"
 prepend_ld_path_if_dir "$ACADOS_ROOT/install/lib"
 prepend_ld_path_if_dir "$MISSING_ROS_PREFIX/lib"
-
-if (( SCENARIO_BASE_ROS_DOMAIN_ID < 0 )); then
-  echo "SCENARIO_BASE_ROS_DOMAIN_ID must be >= 0, got $SCENARIO_BASE_ROS_DOMAIN_ID" >&2
-  exit 2
-fi
-if (( SCENARIO_MAX_ROS_DOMAIN_ID > 232 )); then
-  echo "SCENARIO_MAX_ROS_DOMAIN_ID must be <= 232 for FastDDS UDP port math, got $SCENARIO_MAX_ROS_DOMAIN_ID" >&2
-  exit 2
-fi
-if (( SCENARIO_BASE_ROS_DOMAIN_ID > SCENARIO_MAX_ROS_DOMAIN_ID )); then
-  echo "SCENARIO_BASE_ROS_DOMAIN_ID must be <= SCENARIO_MAX_ROS_DOMAIN_ID, got $SCENARIO_BASE_ROS_DOMAIN_ID > $SCENARIO_MAX_ROS_DOMAIN_ID" >&2
-  exit 2
-fi
 
 export HOME="$AUTOWARE_ROOT"
 export ROS_DOMAIN_ID="$SCENARIO_BASE_ROS_DOMAIN_ID"
@@ -344,9 +528,6 @@ for episode in $(seq 1 "$EPISODES"); do
       run_index=$((run_index + 1))
       RUN_ROS_DOMAIN_ID="$(ros_domain_for_run "$run_index")"
       RUN_SCENARIO_PORT="$SCENARIO_BASE_PORT"
-      if [[ "$ISOLATE_SCENARIO_PORT" == "1" || "$ISOLATE_SCENARIO_PORT" == "true" ]]; then
-        RUN_SCENARIO_PORT=$((SCENARIO_BASE_PORT + run_index - 1))
-      fi
       export ROS_DOMAIN_ID="$RUN_ROS_DOMAIN_ID"
 
       EPISODE_ID="scenario_sim_${variant}_${episode}_a${attempt}"
@@ -382,119 +563,120 @@ for episode in $(seq 1 "$EPISODES"); do
       export UTMR_GOAL_X="${UTMR_GOAL_X:-81673.27596165462}"
       export UTMR_GOAL_Y="${UTMR_GOAL_Y:-50042.52556753614}"
       export UTMR_GOAL_Z="${UTMR_GOAL_Z:-41.347661394530725}"
-    export UTMR_ROUTE_LENGTH_M="${UTMR_ROUTE_LENGTH_M:-77.42}"
-    export UTMR_OBJECTS_TOPIC="${UTMR_OBJECTS_TOPIC:-/perception/object_recognition/objects}"
-    export UTMR_OBJECTS_MSG_TYPE="${UTMR_OBJECTS_MSG_TYPE:-PredictedObjects}"
-    export UTMR_K="${UTMR_K:-64}"
-    export UTMR_TOP_N="${UTMR_TOP_N:-8}"
-    export UTMR_BETA="${UTMR_BETA:-0.25}"
-    export UTMR_GAMMA_H="${UTMR_GAMMA_H:-0.30}"
-    export UTMR_GAMMA_M="${UTMR_GAMMA_M:-0.20}"
-    export UTMR_PLANNER_START_DELAY_S="${UTMR_PLANNER_START_DELAY_S:-55.0}"
-    export UTMR_ENABLE_ROUTE_GUIDANCE="${UTMR_ENABLE_ROUTE_GUIDANCE:-1}"
-    export AWSIM_EMPTY_OBJECTS_TOPIC="${AWSIM_EMPTY_OBJECTS_TOPIC:-/utmr/empty/objects}"
-    export AWSIM_EMPTY_GRID_TOPIC="${AWSIM_EMPTY_GRID_TOPIC:-/utmr/empty/occupancy_grid}"
-    export AWSIM_EMPTY_POINTCLOUD_TOPIC="${AWSIM_EMPTY_POINTCLOUD_TOPIC:-/utmr/empty/pointcloud}"
+      export UTMR_ROUTE_LENGTH_M="${UTMR_ROUTE_LENGTH_M:-77.42}"
+      export UTMR_OBJECTS_TOPIC="${UTMR_OBJECTS_TOPIC:-/perception/object_recognition/objects}"
+      export UTMR_OBJECTS_MSG_TYPE="${UTMR_OBJECTS_MSG_TYPE:-PredictedObjects}"
+      export UTMR_K="${UTMR_K:-64}"
+      export UTMR_TOP_N="${UTMR_TOP_N:-8}"
+      export UTMR_BETA="${UTMR_BETA:-0.25}"
+      export UTMR_GAMMA_H="${UTMR_GAMMA_H:-0.30}"
+      export UTMR_GAMMA_M="${UTMR_GAMMA_M:-0.20}"
+      export UTMR_PLANNER_START_DELAY_S="${UTMR_PLANNER_START_DELAY_S:-55.0}"
+      export UTMR_ENABLE_ROUTE_GUIDANCE="${UTMR_ENABLE_ROUTE_GUIDANCE:-1}"
+      export AWSIM_EMPTY_OBJECTS_TOPIC="${AWSIM_EMPTY_OBJECTS_TOPIC:-/utmr/empty/objects}"
+      export AWSIM_EMPTY_GRID_TOPIC="${AWSIM_EMPTY_GRID_TOPIC:-/utmr/empty/occupancy_grid}"
+      export AWSIM_EMPTY_POINTCLOUD_TOPIC="${AWSIM_EMPTY_POINTCLOUD_TOPIC:-/utmr/empty/pointcloud}"
 
-    publish_perception=0
-    publish_emergency=0
-    publish_mrm_state=0
-    if [[ "$START_EMPTY_SIM_INPUTS" == "1" || "$START_EMPTY_SIM_INPUTS" == "true" ]]; then
-      publish_perception=1
-    fi
-    if [[ "$START_EMERGENCY_HEARTBEAT" == "1" || "$START_EMERGENCY_HEARTBEAT" == "true" ]]; then
-      publish_emergency=1
-    fi
-    if [[ "$START_MRM_HEARTBEAT" == "1" || "$START_MRM_HEARTBEAT" == "true" ]]; then
-      publish_mrm_state=1
-    fi
-    if [[ "$publish_perception" == "1" || "$publish_emergency" == "1" || "$publish_mrm_state" == "1" ]]; then
-      export AWSIM_EMPTY_PUBLISH_PERCEPTION="$publish_perception"
-      export AWSIM_EMPTY_PUBLISH_EMERGENCY="$publish_emergency"
-      export AWSIM_EMPTY_PUBLISH_MRM_STATE="$publish_mrm_state"
-      export AWSIM_EMPTY_INPUT_PERIOD_S="${AWSIM_EMPTY_INPUT_PERIOD_S:-0.05}"
-      start_helper empty_sim_inputs "$HELPER_DIR/empty_sim_inputs.py" \
-        "$HELPER_LOG_DIR/empty_sim_inputs.log"
-    fi
-    start_helper episode_metric_monitor "$HELPER_DIR/episode_metric_monitor.py" \
-      "$HELPER_LOG_DIR/episode_metric_monitor.log"
-    if [[ "$variant" != "baseline" || "$START_BASELINE_PLANNER" == "1" || "$START_BASELINE_PLANNER" == "true" ]]; then
-      start_helper utmr_planner_node "$HELPER_DIR/utmr_planner_node.py" \
-        "$HELPER_LOG_DIR/utmr_planner_node.log"
-    fi
+      publish_perception=0
+      publish_emergency=0
+      publish_mrm_state=0
+      if is_true "$START_EMPTY_SIM_INPUTS"; then
+        publish_perception=1
+      fi
+      if is_true "$START_EMERGENCY_HEARTBEAT"; then
+        publish_emergency=1
+      fi
+      if is_true "$START_MRM_HEARTBEAT"; then
+        publish_mrm_state=1
+      fi
+      if [[ "$publish_perception" == "1" || "$publish_emergency" == "1" || "$publish_mrm_state" == "1" ]]; then
+        export AWSIM_EMPTY_SIMULATION_GUARD=1
+        export AWSIM_EMPTY_PUBLISH_PERCEPTION="$publish_perception"
+        export AWSIM_EMPTY_PUBLISH_EMERGENCY="$publish_emergency"
+        export AWSIM_EMPTY_PUBLISH_MRM_STATE="$publish_mrm_state"
+        export AWSIM_EMPTY_INPUT_PERIOD_S="${AWSIM_EMPTY_INPUT_PERIOD_S:-0.05}"
+        start_helper empty_sim_inputs "$HELPER_DIR/empty_sim_inputs.py" \
+          "$HELPER_LOG_DIR/empty_sim_inputs.log"
+      fi
+      start_helper episode_metric_monitor "$HELPER_DIR/episode_metric_monitor.py" \
+        "$HELPER_LOG_DIR/episode_metric_monitor.log"
+      if [[ "$variant" != "baseline" ]] || is_true "$START_BASELINE_PLANNER"; then
+        start_helper utmr_planner_node "$HELPER_DIR/utmr_planner_node.py" \
+          "$HELPER_LOG_DIR/utmr_planner_node.log"
+      fi
 
-    ros2 launch scenario_test_runner scenario_test_runner.launch.py \
-      architecture_type:=awf/universe/20250130 \
-      record:=false \
-      scenario:="$SCENARIO_FILE" \
-      sensor_model:=sample_sensor_kit \
-      vehicle_model:=sample_vehicle \
-      launch_simple_sensor_simulator:=true \
-      simulate_localization:=true \
-      global_frame_rate:="$SCENARIO_FRAME_RATE" \
-      global_timeout:="$SCENARIO_GLOBAL_TIMEOUT" \
-      initialize_duration:="$SCENARIO_INITIALIZE_DURATION" \
-      publish_empty_context:=true \
-      autoware_launch_file:=planning_simulator.launch.xml \
-      launch_visualization:=false \
-      launch_rviz:=false \
-      autoware.rviz:=false \
-      autoware.scenario_simulation:=true \
-      autoware.map_path:="$MAP_PATH" \
-      autoware.data_path:="$AUTOWARE_DATA_PATH" \
-      port:="$RUN_SCENARIO_PORT" \
-      >"$RUN_LOG" 2>&1 &
-    scenario_pid="$!"
-    if [[ "$STABILIZE_CMD_GATE" == "1" || "$STABILIZE_CMD_GATE" == "true" ]]; then
-      start_cmd_gate_stabilizer "$HELPER_LOG_DIR/cmd_gate_stabilizer.log"
-    fi
-    started="$(date +%s)"
-    wall_limit=$((SCENARIO_GLOBAL_TIMEOUT + WALL_GRACE_S))
-    wall_timed_out=0
-    while kill -0 "$scenario_pid" 2>/dev/null; do
-      now="$(date +%s)"
-      elapsed=$((now - started))
-      if (( elapsed > wall_limit )); then
-        wall_timed_out=1
-        echo
-        echo "wall-clock timeout: ${elapsed}s > ${wall_limit}s"
-        kill -TERM "$scenario_pid" 2>/dev/null || true
-        sleep 8
-        kill -KILL "$scenario_pid" 2>/dev/null || true
+      setsid ros2 launch scenario_test_runner scenario_test_runner.launch.py \
+        architecture_type:=awf/universe/20250130 \
+        record:=false \
+        scenario:="$SCENARIO_FILE" \
+        sensor_model:=sample_sensor_kit \
+        vehicle_model:=sample_vehicle \
+        launch_simple_sensor_simulator:=true \
+        simulate_localization:=true \
+        global_frame_rate:="$SCENARIO_FRAME_RATE" \
+        global_timeout:="$SCENARIO_GLOBAL_TIMEOUT" \
+        initialize_duration:="$SCENARIO_INITIALIZE_DURATION" \
+        publish_empty_context:=true \
+        autoware_launch_file:=planning_simulator.launch.xml \
+        launch_visualization:=false \
+        launch_rviz:=false \
+        autoware.rviz:=false \
+        autoware.scenario_simulation:=true \
+        autoware.map_path:="$MAP_PATH" \
+        autoware.data_path:="$AUTOWARE_DATA_PATH" \
+        port:="$RUN_SCENARIO_PORT" \
+        >"$RUN_LOG" 2>&1 &
+      scenario_pid="$!"
+      CURRENT_SCENARIO_PID="$scenario_pid"
+      if is_true "$STABILIZE_CMD_GATE"; then
+        start_cmd_gate_stabilizer "$HELPER_LOG_DIR/cmd_gate_stabilizer.log"
+      fi
+      started="$(date +%s)"
+      wall_limit=$((SCENARIO_GLOBAL_TIMEOUT + WALL_GRACE_S))
+      wall_timed_out=0
+      while kill -0 "$scenario_pid" 2>/dev/null; do
+        now="$(date +%s)"
+        elapsed=$((now - started))
+        if (( elapsed > wall_limit )); then
+          wall_timed_out=1
+          echo
+          echo "wall-clock timeout: ${elapsed}s > ${wall_limit}s" | tee -a "$RUN_LOG"
+          stop_scenario_process_group "$scenario_pid"
+          break
+        fi
+        draw_bar "$elapsed" "$wall_limit" "$variant/$episode/a$attempt"
+        sleep 2
+      done
+      set +e
+      wait "$scenario_pid"
+      exit_code="$?"
+      set -e
+      CURRENT_SCENARIO_PID=""
+      if [[ "$wall_timed_out" == "1" ]]; then
+        exit_code=124
+      fi
+      draw_bar "$wall_limit" "$wall_limit" "$variant/$episode/a$attempt"
+      echo
+
+      cleanup_helpers
+      result="$(classify_result "$RUN_LOG" "$exit_code")"
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$variant" "$episode" "$attempt" "$result" "$exit_code" "$RUN_LOG" "$STEP_LOG" "$EPISODE_ID" >>"$STATUS_TSV"
+      echo "result=$result exit=$exit_code attempt=$attempt"
+      if is_true "$PRINT_LOG_TAIL"; then
+        rg -n "Passed|exitSuccess|exitFailure|AutowareError|AutowareState|Route set|collision|wall-clock timeout|timed out|TimeoutError|MRM_FAILED" "$RUN_LOG" | tail -80 || true
+      fi
+      echo
+      if [[ "$result" == "passed" ]]; then
+        variant_passed=1
         break
       fi
-      draw_bar "$elapsed" "$wall_limit" "$variant/$episode/a$attempt"
-      sleep 2
-    done
-    set +e
-    wait "$scenario_pid"
-    exit_code="$?"
-    set -e
-    if [[ "$wall_timed_out" == "1" && "$exit_code" == "0" ]]; then
-      exit_code=124
-    fi
-    draw_bar "$wall_limit" "$wall_limit" "$variant/$episode/a$attempt"
-    echo
-
-    cleanup_helpers
-    result="$(classify_result "$RUN_LOG" "$exit_code")"
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-      "$variant" "$episode" "$attempt" "$result" "$exit_code" "$RUN_LOG" "$STEP_LOG" "$EPISODE_ID" >>"$STATUS_TSV"
-    echo "result=$result exit=$exit_code attempt=$attempt"
-    if [[ "$PRINT_LOG_TAIL" == "1" || "$PRINT_LOG_TAIL" == "true" ]]; then
-      rg -n "Passed|exitSuccess|exitFailure|AutowareError|AutowareState|Route set|collision|timeout" "$RUN_LOG" | tail -80 || true
-    fi
-    echo
-    if [[ "$result" == "passed" ]]; then
-      variant_passed=1
-      break
-    fi
-    if (( attempt < MAX_ATTEMPTS )); then
-      echo "retrying variant=$variant episode=$episode after failed attempt=$attempt"
-    fi
-    if (( RUN_COOLDOWN_S > 0 )); then
-      sleep "$RUN_COOLDOWN_S"
-    fi
+      if (( attempt < MAX_ATTEMPTS )); then
+        echo "retrying variant=$variant episode=$episode after failed attempt=$attempt"
+      fi
+      if (( RUN_COOLDOWN_S > 0 )); then
+        sleep "$RUN_COOLDOWN_S"
+      fi
     done
     if [[ "$variant_passed" != "1" ]]; then
       echo "variant=$variant episode=$episode exhausted $MAX_ATTEMPTS attempts"
@@ -504,5 +686,5 @@ done
 
 write_summary
 cleanup_helpers
-find "$ROOT" -xdev -type l -name .codegraph -delete 2>/dev/null || true
+unlink "$ROOT/.codegraph" 2>/dev/null || true
 echo "symlinks under UTMR: $(find "$ROOT" -xdev -type l | wc -l)"

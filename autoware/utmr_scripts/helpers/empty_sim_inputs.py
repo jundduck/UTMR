@@ -77,6 +77,15 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def read_config() -> EmptyInputConfig:
+    publish_perception = _env_bool("AWSIM_EMPTY_PUBLISH_PERCEPTION", False)
+    publish_emergency = _env_bool("AWSIM_EMPTY_PUBLISH_EMERGENCY", False)
+    publish_mrm_state = _env_bool("AWSIM_EMPTY_PUBLISH_MRM_STATE", False)
+    wants_publish = publish_perception or publish_emergency or publish_mrm_state
+    simulation_guard = _env_bool("AWSIM_EMPTY_SIMULATION_GUARD", False)
+    if wants_publish and not simulation_guard:
+        raise SystemExit(
+            "refusing to publish synthetic Autoware inputs without AWSIM_EMPTY_SIMULATION_GUARD=1"
+        )
     return EmptyInputConfig(
         objects_topic=_env_str("AWSIM_EMPTY_OBJECTS_TOPIC", DEFAULT_OBJECTS_TOPIC),
         grid_topic=_env_str("AWSIM_EMPTY_GRID_TOPIC", DEFAULT_GRID_TOPIC),
@@ -105,9 +114,9 @@ def read_config() -> EmptyInputConfig:
         grid_resolution=_env_float("AWSIM_EMPTY_GRID_RESOLUTION", 2.0),
         grid_width=_env_int("AWSIM_EMPTY_GRID_WIDTH", 256),
         grid_height=_env_int("AWSIM_EMPTY_GRID_HEIGHT", 256),
-        publish_perception=_env_bool("AWSIM_EMPTY_PUBLISH_PERCEPTION", True),
-        publish_emergency=_env_bool("AWSIM_EMPTY_PUBLISH_EMERGENCY", True),
-        publish_mrm_state=_env_bool("AWSIM_EMPTY_PUBLISH_MRM_STATE", False),
+        publish_perception=publish_perception,
+        publish_emergency=publish_emergency,
+        publish_mrm_state=publish_mrm_state,
     )
 
 
@@ -243,8 +252,9 @@ class EmptySimInputs(Node):
 
 
 def main() -> None:
+    config = read_config()
     rclpy.init()
-    node = EmptySimInputs(read_config())
+    node = EmptySimInputs(config)
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):

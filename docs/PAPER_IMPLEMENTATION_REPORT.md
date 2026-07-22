@@ -620,6 +620,40 @@ experiments/utmr/results/autoware_scenario_sim_paper_pair_5eps_safe_domain_20260
   Simulator closed-loop 경로가 논문 실험에 사용할 수 있을 만큼 작동한다는
   통합 증거입니다. 더 강한 결론에는 추가 scenario/route가 필요합니다.
 
+후속 hardening:
+
+- `ISOLATE_SCENARIO_PORT=1`을 금지했습니다. Scenario Simulator handshake는
+  fixed port `5555`를 유지하고, 반복 attempt 격리는 safe wrapped
+  `ROS_DOMAIN_ID`만 사용합니다.
+- `SCENARIO_BASE_ROS_DOMAIN_ID`, `SCENARIO_MAX_ROS_DOMAIN_ID`, `EPISODES`,
+  `MAX_ATTEMPTS` 같은 shell 숫자 입력을 Bash arithmetic 전에 정수로
+  파싱합니다.
+- `empty_sim_inputs.py`는 `AWSIM_EMPTY_SIMULATION_GUARD=1`이 없으면 synthetic
+  perception/emergency/MRM topic을 publish하지 않습니다.
+- collision topic이나 timeout evidence가 없으면 episode metric CSV에
+  unknown을 빈칸으로 남깁니다.
+- runtime evidence상 Scenario Simulator 성공 run에도
+  `Subscribed ... is timed out`, recovered `MRM_FAILED`, teardown
+  `process has died ... exit code -11`이 나타날 수 있습니다. 그래서 runner는
+  `AutowareError`, `exitFailure`, runner wall-clock timeout, `TimeoutError`
+  같은 강한 marker가 없으면 `Passed`를 scenario authority로 둡니다.
+
+hardening 후 smoke:
+
+```text
+experiments/utmr/results/autoware_scenario_sim_postfix_pair_1eps_reclass_20260722_181208
+baseline: passed, success=True, timeout=False, driving_score=75.4291
+UTMR:     passed, success=True, timeout=False, driving_score=76.7892
+```
+
+현재 장시간 candidate:
+
+```text
+experiments/utmr/results/autoware_scenario_sim_paper_pair_200eps_postfix_20260722_181528
+status: running
+target: baseline/utmr x 200 episodes, max 3 attempts per episode
+```
+
 Main AWSIM live batch result:
 
 | Method | Episodes | Collision source | Success | Fallback | Mean speed km/h | Driving score |
