@@ -35,7 +35,7 @@ class EpisodeMetricMonitor(Node):
         self.route_length_m = optional_float(os.environ.get("UTMR_ROUTE_LENGTH_M", ""))
         self.collision_topic = os.environ.get("UTMR_COLLISION_TOPIC", "")
         self.kinematic_topic = os.environ.get("UTMR_KINEMATIC_TOPIC", "/localization/kinematic_state")
-        self.kinematic_msg_type = os.environ.get("UTMR_KINEMATIC_MSG_TYPE", "Odometry")
+        self.kinematic_msg_type = os.environ.get("UTMR_KINEMATIC_MSG_TYPE", "KinematicState")
         self.route_state_topic = os.environ.get("UTMR_ROUTE_STATE_TOPIC", "/api/routing/state")
 
         self.started_wall = time.monotonic()
@@ -46,6 +46,7 @@ class EpisodeMetricMonitor(Node):
         self.success = False
         self.route_state_enabled = False
         self.row_written = False
+        self.dropped_uninitialized_samples = 0
 
         self.create_kinematic_subscription()
         self.create_route_state_subscription()
@@ -86,6 +87,13 @@ class EpisodeMetricMonitor(Node):
 
     def record_motion(self, pose, twist):
         current = (pose.position.x, pose.position.y)
+        if self.is_uninitialized_pose(current):
+            self.dropped_uninitialized_samples += 1
+            if self.dropped_uninitialized_samples == 1:
+                self.get_logger().info(
+                    "dropping kinematic samples until scenario pose is near the configured route"
+                )
+            return
         if self.first_pose is None:
             self.first_pose = current
         self.last_pose = current
@@ -114,6 +122,15 @@ class EpisodeMetricMonitor(Node):
         distance = self.distance_m()
         mean_speed = mean(self.speed_samples_kmh)
         driving_score = self.driving_score(distance, mean_speed)
+        has_motion_samples = self.first_pose is not None and self.last_pose is not None
+        metric_source = "observed" if has_motion_samples else "fallback"
+        notes = []
+        if not self.route_state_enabled:
+            notes.append("route_state_subscription_unavailable")
+        if not has_motion_samples:
+            notes.append("no_kinematic_samples")
+        if self.dropped_uninitialized_samples:
+            notes.append(f"dropped_uninitialized_samples={self.dropped_uninitialized_samples}")
         path = Path(self.episode_csv)
         path.parent.mkdir(parents=True, exist_ok=True)
         exists = path.exists()
@@ -147,8 +164,8 @@ class EpisodeMetricMonitor(Node):
                     "route_length_m": self.route_length_m if self.route_length_m is not None else "",
                     "mean_speed_kmh": mean_speed,
                     "driving_score": driving_score,
-                    "metric_source": "observed",
-                    "metric_note": "" if self.route_state_enabled else "route_state_subscription_unavailable",
+                    "metric_source": metric_source,
+                    "metric_note": ";".join(notes),
                 }
             )
         self.get_logger().info(f"wrote episode metrics to {path}")
@@ -157,6 +174,13 @@ class EpisodeMetricMonitor(Node):
         if self.first_pose is None or self.last_pose is None:
             return float("nan")
         return math.hypot(self.last_pose[0] - self.first_pose[0], self.last_pose[1] - self.first_pose[1])
+
+    def is_uninitialized_pose(self, current):
+        if self.goal_x is None or self.goal_y is None or self.route_length_m is None:
+            return False
+        distance_to_goal = math.hypot(current[0] - self.goal_x, current[1] - self.goal_y)
+        threshold = max(1000.0, self.route_length_m * 5.0, self.goal_radius_m * 4.0)
+        return distance_to_goal > threshold
 
     def driving_score(self, distance_m, mean_speed_kmh):
         progress = 0.0
@@ -184,17 +208,17 @@ def mean(values):
 def main():
     rclpy.init()
     node = EpisodeMetricMonitor()
+    stop_requested = False
 
     def handle_signal(signum, frame):
-        node.write_row()
-        if rclpy.ok():
-            rclpy.shutdown()
-        raise SystemExit(0)
+        nonlocal stop_requested
+        stop_requested = True
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
     try:
-        rclpy.spin(node)
+        while rclpy.ok() and not stop_requested:
+            rclpy.spin_once(node, timeout_sec=0.2)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     except RCLError as exc:

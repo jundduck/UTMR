@@ -148,6 +148,46 @@ success: 100%
 collision source: not verified in this run
 ```
 
+Scenario Simulator / OpenSCENARIO closed-loop evidence:
+
+```bash
+cd /home/yax/UTMR
+EPISODES=5 \
+VARIANTS="baseline utmr" \
+MAX_ATTEMPTS=3 \
+SCENARIO_BASE_ROS_DOMAIN_ID=80 \
+SCENARIO_MAX_ROS_DOMAIN_ID=120 \
+ISOLATE_ROS_DOMAIN=1 \
+ISOLATE_SCENARIO_PORT=0 \
+START_BASELINE_PLANNER=1 \
+PRINT_LOG_TAIL=0 \
+experiments/utmr/run_autoware_scenario_sim_paper_batch.sh
+```
+
+Latest result:
+
+```text
+experiments/utmr/results/autoware_scenario_sim_paper_pair_5eps_safe_domain_20260722_170510
+
+summary_aggregate.tsv
+variant   episodes  passed  success_pct  mean_attempts  mean_distance_m  mean_speed_kmh  mean_driving_score
+baseline  5         5       100.0000     1.6000         76.6824          7.8793          76.1175
+utmr      5         5       100.0000     1.0000         76.9110          8.3172          76.3712
+```
+
+This runner keeps OpenSCENARIO's port fixed at `5555`, isolates each attempt
+with a fresh `ROS_DOMAIN_ID`, publishes normal emergency/MRM heartbeat input,
+and retries flaky scenario-simulator startup failures. Baseline can be run with
+the same UTMR planner surface in `coarse` mode, so the live comparison becomes
+coarse baseline trajectory publication versus UTMR reranking trajectory
+publication instead of depending on stock Autoware planner timing alone.
+
+The runner also caps isolated ROS domains with `SCENARIO_MAX_ROS_DOMAIN_ID`
+because FastDDS reports `Calculated port number is too high` above domain
+`232`. A diagnostic 5-episode run using base domain `220` confirmed this
+failure mode on domains `233..235`; the safe-domain rerun above avoids that
+middleware limit and passes all 10 final variant/episode rows.
+
 `setup_wote_runtime.sh` installs the UTMR-local Python packages needed to import WoTE/NAVSIM without creating a virtualenv or symlinks. `source_wote_runtime.sh` exports `PYTHONPATH`, `NAVSIM_DEVKIT_ROOT`, `OPENSCENE_DATA_ROOT`, and the matching map/exp roots for the current shell.
 
 `prepare_wote_assets.sh` clones or updates `liyingyanUCAS/WoTE`, downloads the released WoTE checkpoint, ResNet-34 backbone, K=256 anchors, K=256 PDM-score cache, then derives matching K=64 anchors and a K=64 PDM-score cache from the released K=256 files.

@@ -136,7 +136,8 @@ def object_pose(obj):
 class UTMRPlannerNode(Node):
     def __init__(self):
         super().__init__("utmr_planner_node")
-        self.set_parameters([Parameter("use_sim_time", Parameter.Type.BOOL, True)])
+        use_sim_time = os.environ.get("UTMR_USE_SIM_TIME", "0").lower() in {"1", "true", "yes", "on"}
+        self.set_parameters([Parameter("use_sim_time", Parameter.Type.BOOL, use_sim_time)])
 
         self.mode = os.environ.get("UTMR_MODE", "utmr")
         self.log_path = os.environ.get("UTMR_STEP_LOG", "")
@@ -147,7 +148,7 @@ class UTMRPlannerNode(Node):
         self.obstacle_min_probability = float(os.environ.get("UTMR_OBJECT_MIN_PROBABILITY", "0.1"))
         self.obstacle_max_range_m = float(os.environ.get("UTMR_OBJECT_MAX_RANGE_M", "120.0"))
         self.kinematic_topic = os.environ.get("UTMR_KINEMATIC_TOPIC", "/localization/kinematic_state")
-        self.kinematic_msg_type = os.environ.get("UTMR_KINEMATIC_MSG_TYPE", "Odometry")
+        self.kinematic_msg_type = os.environ.get("UTMR_KINEMATIC_MSG_TYPE", "KinematicState")
         self.fallback_pose = (
             float(os.environ.get("UTMR_FALLBACK_X", "81377.34")),
             float(os.environ.get("UTMR_FALLBACK_Y", "49916.89")),
@@ -157,6 +158,10 @@ class UTMRPlannerNode(Node):
         self.fallback_speed_mps = float(os.environ.get("UTMR_FALLBACK_SPEED_MPS", "8.0"))
         self.publish_horizon_s = float(os.environ.get("UTMR_PUBLISH_HORIZON_S", "4.0"))
         self.publish_dt_s = float(os.environ.get("UTMR_PUBLISH_DT_S", "0.2"))
+        self.publish_start_delay_s = max(0.0, float(os.environ.get("UTMR_PLANNER_START_DELAY_S", "0.0")))
+        self.step_log_every_n = max(1, int(os.environ.get("UTMR_STEP_LOG_EVERY_N", "10")))
+        self.publish_start_wall = time.monotonic() + self.publish_start_delay_s
+        self.delay_logged = False
         self.route_guidance_enabled = os.environ.get("UTMR_ENABLE_ROUTE_GUIDANCE", "1") != "0"
         self.route_lookahead_m = finite_env("UTMR_ROUTE_LOOKAHEAD_M", "25.0", 1.0, 200.0)
         self.route_max_yaw_rad = finite_env("UTMR_ROUTE_MAX_YAW_RAD", "0.75", 0.0, 1.57)
@@ -366,6 +371,14 @@ class UTMRPlannerNode(Node):
         return ""
 
     def publish_trajectory(self):
+        if time.monotonic() < self.publish_start_wall:
+            if not self.delay_logged:
+                self.delay_logged = True
+                self.get_logger().info(
+                    f"delaying UTMR trajectory publication for {self.publish_start_delay_s:.1f}s"
+                )
+            return
+
         start_time = time.perf_counter()
         x, y, z, yaw, speed = self.current_state()
         obstacles = self.obstacles_for_planning(x, y, yaw)
@@ -448,12 +461,14 @@ class UTMRPlannerNode(Node):
     ):
         if not self.log_path:
             return
+        if self.count % self.step_log_every_n != 0:
+            return
         row = result.to_step_log(
             episode_id=os.environ.get("UTMR_EPISODE_ID", "awsim_live"),
             step=self.count,
             latency_ms=latency_ms,
         )
-        row["method_variant"] = self.mode
+        row["method_variant"] = os.environ.get("UTMR_VARIANT", self.mode)
         row["ego_speed_kmh"] = float(speed_mps * 3.6)
         row["route_guided"] = bool(route_guided)
         row["route_guidance_reject_reason"] = route_guidance_reject_reason
