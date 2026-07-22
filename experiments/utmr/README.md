@@ -2,6 +2,13 @@
 
 This directory keeps the paper-reproduction work inside `/home/yax/UTMR` without symlinks.
 
+Execution note for GitHub users: the scripts here are the experiment source and
+runbooks, not a standalone binary bundle. The actual long runs used a prepared
+local UTMR workspace with ROS 2 Humble, built Autoware packages, `shinjuku_map`,
+Autoware model/data folders, and UTMR-local runtime overlays already present.
+Those build products, datasets, metric caches, and raw result logs are excluded
+from GitHub because they are large machine-local artifacts.
+
 Paper settings from the attachment:
 
 - candidate trajectories: `K=64`
