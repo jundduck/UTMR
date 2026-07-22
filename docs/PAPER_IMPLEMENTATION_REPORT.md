@@ -560,6 +560,68 @@ The useful evidence is that `/planning/trajectory` publication was route-guided
 for every recorded step. The later safety hardening keeps synthetic fallback
 planner-only unless the route service succeeds.
 
+### Scenario Simulator / OpenSCENARIO closed-loop runner
+
+AWSIM Unity와 별개로, Autoware 공식 Scenario Simulator v2 /
+OpenSCENARIO 경로도 논문 구현용 closed-loop smoke로 연결했습니다. 이 경로는
+planning simulator launch 위에서 localization, dummy perception, route,
+control을 닫힌 루프로 실행합니다.
+
+핵심 runner:
+
+```text
+experiments/utmr/run_autoware_scenario_sim_paper_batch.sh
+```
+
+중요한 구현 사항:
+
+- OpenSCENARIO port는 `5555`로 고정합니다. port를 attempt마다 바꾸면
+  Scenario Simulator handshake가 깨지는 경우가 있었습니다.
+- attempt 격리는 `ROS_DOMAIN_ID`로 합니다.
+- 긴 batch에서는 FastDDS domain port 계산 한계를 넘지 않도록
+  `SCENARIO_MAX_ROS_DOMAIN_ID`를 추가하고, domain을 cap 안에서 wrap합니다.
+- baseline도 `START_BASELINE_PLANNER=1`일 때 같은 helper surface를 쓰되
+  `coarse` mode로 trajectory를 publish합니다. 그래서 비교 대상은
+  stock planner timing이 아니라 coarse baseline trajectory publication과
+  UTMR reranking trajectory publication입니다.
+- 모든 attempt는 `summary.tsv`에 남기고, 최종 비교는 episode별 첫 passed
+  attempt를 고른 `summary_final.tsv`와 per-variant
+  `summary_aggregate.tsv`로 봅니다.
+
+진단 run:
+
+```text
+experiments/utmr/results/autoware_scenario_sim_paper_pair_5eps_retry_20260722_163442
+```
+
+이 run은 `SCENARIO_BASE_ROS_DOMAIN_ID=220`에서 retry가 누적되며 domain
+`233..235`에 도달했고, FastDDS가 아래 메시지로 launch 초기에 죽었습니다.
+
+```text
+Calculated port number is too high. Probably the domainId is over 232 or portBase is too high.
+```
+
+수정 후 safe-domain 재실행:
+
+```text
+experiments/utmr/results/autoware_scenario_sim_paper_pair_5eps_safe_domain_20260722_170510
+```
+
+| Variant | Episodes | Passed | Mean attempts | Mean distance m | Mean speed km/h | Driving score |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 5 | 5 | 1.6000 | 76.6824 | 7.8793 | 76.1175 |
+| UTMR | 5 | 5 | 1.0000 | 76.9110 | 8.3172 | 76.3712 |
+
+해석:
+
+- safe-domain run에서는 baseline과 UTMR 모두 최종 episode 기준 5/5 통과했습니다.
+- UTMR 평균 closed-loop driving score가 baseline보다 `+0.2537` 높았습니다.
+- 다만 episode 수가 5라서, 이것은 최종 통계 결론이라기보다 Scenario
+  Simulator closed-loop 경로가 논문 실험에 사용할 수 있을 만큼 작동한다는
+  통합 증거입니다. 더 강한 결론에는 추가 scenario/route가 필요합니다.
+
+Main AWSIM live batch result:
+
 | Method | Episodes | Collision source | Success | Fallback | Mean speed km/h | Driving score |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | WoTE | 5 | not measured | 100% | 0 | 4.758 +/- 0.802 | 75.99 +/- 0.167 |

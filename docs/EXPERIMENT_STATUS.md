@@ -1,6 +1,6 @@
 # UTMR Experiment Status
 
-Last updated: 2026-07-14 KST.
+Last updated: 2026-07-22 KST.
 
 ## Scope
 
@@ -383,7 +383,42 @@ figures/fig4_selection_bias.png
 figures/fig5_score_landscape.png
 ```
 
-Interpretation:
+## Scenario Simulator / OpenSCENARIO Status
+
+Status: Autoware Scenario Simulator v2 closed-loop runner is working for paired
+baseline/UTMR smoke batches.
+
+Latest safe-domain run:
+
+```text
+experiments/utmr/results/autoware_scenario_sim_paper_pair_5eps_safe_domain_20260722_170510
+```
+
+Final episode aggregate:
+
+| Variant | Episodes | Passed | Success | Mean attempts | Mean distance m | Mean speed km/h | Driving score |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 5 | 5 | 100% | 1.6000 | 76.6824 | 7.8793 | 76.1175 |
+| UTMR | 5 | 5 | 100% | 1.0000 | 76.9110 | 8.3172 | 76.3712 |
+
+What this means:
+
+- This is not the NAVSIM offline PDM score. It is a closed-loop Autoware
+  planning/control smoke using Scenario Simulator v2 and OpenSCENARIO.
+- Baseline is run through the same helper surface in `coarse` mode, while UTMR
+  runs the reranking planner. That keeps the comparison closer to
+  baseline-trajectory publication versus UTMR-trajectory publication.
+- Earlier repeated runs exposed a middleware issue: with base domain `220`, the
+  retry sequence reached ROS domains `233..235`; FastDDS terminated immediately
+  with `Calculated port number is too high. Probably the domainId is over 232 or
+  portBase is too high.`
+- `experiments/utmr/run_autoware_scenario_sim_paper_batch.sh` now exposes
+  `SCENARIO_MAX_ROS_DOMAIN_ID` and wraps isolated domains before crossing the
+  FastDDS limit.
+- Safe-domain run used `SCENARIO_BASE_ROS_DOMAIN_ID=80` and
+  `SCENARIO_MAX_ROS_DOMAIN_ID=120`. It finished with no symlinks under UTMR.
+
+AWSIM live interpretation:
 
 - The AWSIM + Autoware + UTMR planner + reducer path now runs end-to-end and
   produces observed success rows for all five variants across repeated episodes.

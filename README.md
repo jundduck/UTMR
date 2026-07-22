@@ -30,6 +30,7 @@ UTMR가 baseline보다 높은 결과를 냈습니다.
 | WoTE baseline | 1000 | 1000 / 0 | 0.8638675087 | subset 기준선 |
 | UTMR guarded safety | 1000 | 1000 / 0 | 0.8720460220 | tuning용 subset 결과 |
 | AWSIM live repeated batch | 5 variants x 5 episodes | 25 / 0 fallback rows | success 100%, collision source unverified | live closed-loop 반복 실행 성공 |
+| Scenario Simulator closed-loop | baseline/utmr x 5 episodes | 10 / 0 final failures | baseline 76.1175, UTMR 76.3712 | OpenSCENARIO 기반 Autoware closed-loop 비교 성공 |
 | AWSIM turn-guidance smoke | 45 s | 524 / 524 route-guided steps | distance 5.31 m, timeout | live planner가 더 이상 직진만 하지 않음을 확인 |
 
 `UTMR guarded safety`는 baseline 후보를 무조건 바꾸지 않고, fine metric
@@ -163,6 +164,30 @@ figures/fig5_score_landscape.png
   `fine_dt_only`와 `uniform_fine`이 근소하게 높았습니다. 따라서 live 결과는
   “통합 경로 안정화” 증거로 보는 것이 맞고, 성능 결론은 추가 route/scenario가
   필요합니다.
+
+Scenario Simulator / OpenSCENARIO closed-loop:
+
+```text
+experiments/utmr/results/autoware_scenario_sim_paper_pair_5eps_safe_domain_20260722_170510
+```
+
+| Method | Episodes | Passed | Mean attempts | Mean distance m | Mean speed km/h | Driving score |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 5 | 5 | 1.6000 | 76.6824 | 7.8793 | 76.1175 |
+| UTMR | 5 | 5 | 1.0000 | 76.9110 | 8.3172 | 76.3712 |
+
+해석:
+
+- 이 실험은 AWSIM Unity가 아니라 Autoware Scenario Simulator v2 /
+  OpenSCENARIO 경로입니다. Planning simulator launch 위에서 localization,
+  perception dummy input, route, control을 닫힌 루프로 검증합니다.
+- baseline도 같은 helper surface에서 `coarse` mode trajectory를 publish하게
+  해 stock Autoware planner timing flake와 UTMR reranking 효과를 분리했습니다.
+- 긴 batch에서 `ROS_DOMAIN_ID > 232`가 되면 FastDDS가
+  `Calculated port number is too high`로 즉시 죽는 문제가 확인되어,
+  runner에 `SCENARIO_MAX_ROS_DOMAIN_ID` cap/wrap을 추가했습니다.
+- safe-domain 재실행에서는 baseline과 UTMR 모두 최종 episode 기준 5/5
+  통과했고, UTMR 평균 driving score가 baseline보다 `+0.2537` 높았습니다.
 
 ## 어떤 실험을 했고 어떤 결과가 나왔나
 
